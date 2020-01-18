@@ -6,7 +6,7 @@ use std::path::Path;
 
 pub struct BIOS
 {
-    data: [u8; 512] // TODO 32?
+    data: Vec<u8> // TODO 32?
 }
 
 impl BIOS
@@ -15,10 +15,10 @@ impl BIOS
     {
         println!("Loading BIOS: \"{}\"", path.display());
 
-        let mut buffer = [0; 512];
+        let mut buffer = Vec::new();
 
         let mut file = File::open(path).unwrap(); //TODO err
-        file.read_exact(&mut buffer).unwrap(); // TODO err
+        file.read_to_end(&mut buffer).unwrap(); // TODO err
 
         BIOS
         {
