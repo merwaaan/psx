@@ -26,8 +26,18 @@ impl BIOS
         }
     }
 
+    pub fn read8(&self, addr: u32) -> u8
+    {
+        println!("BIOS read8 @ {:08x}", addr);
+
+        let offset = addr as usize;
+        self.data[offset]
+    }
+
     pub fn read(&self, addr: u32) -> u32
     {
+        println!("BIOS read @ {:08x}", addr);
+
         let offset = addr as usize;
 
         let b0 = self.data[offset] as u32;

@@ -11,9 +11,9 @@ pub struct PSX
 
 impl PSX
 {
-    pub fn new(biosPath: &Path) -> Self
+    pub fn new(bios_path: &Path) -> Self
     {
-        let mem = Memory::new(biosPath);
+        let mem = Memory::new(bios_path);
 
         PSX
         {
