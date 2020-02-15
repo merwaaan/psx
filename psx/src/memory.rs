@@ -15,7 +15,7 @@ impl Memory
         Memory
         {
             bios: BIOS::new(bios_path),
-            ram: vec![0; 0x200000]
+            ram: vec![0; 0x1F000000]
         }
     }
 
@@ -46,6 +46,7 @@ impl Memory
         match addr
         {
             0x00000000 ..= 0x1F000000 =>  self.read_ram(addr), // TODO exclusive range
+            0x1F801000 ..= 0x1F801078 => 0,
 
             0x80000000 ..= 0x9F000000 =>  self.read_ram(addr - 0x80000000), // TODO exclusive range
 
@@ -89,6 +90,8 @@ impl Memory
 
             0x80000000 ..= 0x9F000000 =>  self.write_ram8(addr - 0x80000000, val), // TODO exclusive range
 
+            0xA0000000 ..= 0xBF000000 =>  self.write_ram8(addr - 0xA0000000, val), // TODO exclusive range
+
             _                         => panic!("Unsupported write8 address: {:08x}", addr)
         }
     }
@@ -99,6 +102,7 @@ impl Memory
 
         match addr
         {
+            0x1F801100 ..= 0x1F801130 => println!("Ignored write to the timer registers: {:08x} @ {:08x}", val, addr),
             0x1F801C00 ..= 0x1F802240 => println!("Ignored write to the SPU register: {:08x} @ {:08x}", val, addr),
             _                         => panic!("Unsupported write16 address: {:08x}", addr)
         }

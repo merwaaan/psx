@@ -8,6 +8,9 @@
 
 use crate::memory::Memory;
 
+use std::fs::File;
+use std::io::Write;
+
 struct Opcode(u32);
 
 impl Opcode
@@ -78,19 +81,34 @@ impl Opcode
 
 // TODO make sure R0 always 0
 
+enum Exception
+{
+    Syscall = 0x8
+}
+
 pub struct CPU
 {
     pc: u32,
+    next_pc: u32,
 
     r: [u32; 32],
     r_out: [u32; 32], // To simulate the load-delay slot
 
-    fetched_opcode: (u32, u32), //(opcode, pc)
+    hi: u32,
+    lo: u32,
+
     pending_load: (u32, u32), // (register, value)
 
     status: u32, // TODO all cop registers?
 
-    counter: u32
+    // Exception handling
+    current_pc: u32,
+    cause: u32,
+    epc: u32,
+
+    counter: u32,
+
+    log_file: File
 }
 
 impl CPU
@@ -99,14 +117,24 @@ impl CPU
     {
         CPU
         {
-            pc: 0xBFC00000, // The PC starts with the BIOS address
+            pc: 0xBFC00000, // The PC starts with the BIOS address,
+            next_pc: 0xBFC00004,
+
             r: [0; 32],
             r_out: [0; 32],
-            fetched_opcode: (0, 0), // NOP
+            hi: 0,
+            lo: 0,
+
             pending_load: (0, 0),
             status: 0,
 
-            counter: 0
+            current_pc: 0,
+            cause: 0,
+            epc: 0,
+
+            counter: 0,
+
+            log_file: File::create("custom_log_own.txt").unwrap()
         }
     }
 
@@ -119,19 +147,32 @@ impl CPU
 
         // Fetch the next instruction
 
-        let (opcode, pc) = self.fetched_opcode;
+        self.current_pc = self.pc;
+        let opcode = mem.read(self.pc); // TODO directly Opcode, need to impl to str
 
-        self.fetched_opcode = (mem.read(self.pc), self.pc); // TODO directly Opcode, need to impl to str
+        self.pc = self.next_pc;
+        self.next_pc = self.pc.wrapping_add(4);
 
-        for i in 0 .. 32
+        if self.counter > 2695640
         {
-            println!("\tR{} = {:08x}", i, self.r[i]);
+            // debug logging
+    /*
+            write!(&mut self.log_file, "{:08x} {:08x} ", self.current_pc, opcode).unwrap();
+            for i in 0 .. 32
+            {
+                write!(&mut self.log_file, "R{} {:08x} ", i, self.r[i]).unwrap();
+            }
+            write!(&mut self.log_file, "HI {:08x} ", self.hi).unwrap();
+            write!(&mut self.log_file, "LO {:08x} ", self.lo).unwrap();
+            write!(&mut self.log_file, "\n").unwrap();
+
+            for i in 0 .. 32
+            {
+                println!("\tR{} = {:08x}", i, self.r[i]);
+            }
+    */
+            println!("\nopcode {:08x} @ {:08x} | {:b} | {}", opcode, self.current_pc, self.status, self.counter);
         }
-
-        println!("\nopcode {:08x} @ {:08x} | {:b} | {}", opcode, pc, self.status, self.counter);
-
-        self.pc += 4;
-
         self.counter += 1;
 
         match Opcode(opcode).instr()
@@ -141,13 +182,21 @@ impl CPU
                 match Opcode(opcode).sub()
                 {
                     0b000000 => self.sll(&Opcode(opcode)),
+                    0b000010 => self.srl(&Opcode(opcode)),
                     0b000011 => self.sra(&Opcode(opcode)),
                     0b001000 => self.jr(&Opcode(opcode)),
                     0b001001 => self.jalr(&Opcode(opcode)),
+                    0b001100 => self.syscall(),
+                    0b010000 => self.mfhi(&Opcode(opcode)),
+                    0b010010 => self.mflo(&Opcode(opcode)),
+                    0b011010 => self.div(&Opcode(opcode)),
+                    0b011011 => self.divu(&Opcode(opcode)),
                     0b100000 => self.add(&Opcode(opcode)),
                     0b100001 => self.addu(&Opcode(opcode)),
+                    0b100011 => self.subu(&Opcode(opcode)),
                     0b100100 => self.and(&Opcode(opcode)),
                     0b100101 => self.or(&Opcode(opcode)),
+                    0b101010 => self.slt(&Opcode(opcode)),
                     0b101011 => self.sltu(&Opcode(opcode)),
                     _        => panic!("Unsupported opcode: {:08x}", opcode)
                 }
@@ -172,6 +221,7 @@ impl CPU
             0b001000 => self.addi(& Opcode(opcode)),
             0b001001 => self.addiu(& Opcode(opcode)),
             0b001010 => self.slti(& Opcode(opcode)),
+            0b001011 => self.sltiu(& Opcode(opcode)),
             0b001100 => self.andi(&Opcode(opcode)),
             0b001101 => self.ori(&Opcode(opcode)),
             0b001111 => self.lui(&Opcode(opcode)),
@@ -252,11 +302,62 @@ impl CPU
         self.set_reg(opcode.rd(), result);
     }
 
+    fn div(&mut self, opcode: &Opcode)
+    {
+        println!("DIV _ R{}={:08x} / R{}={:08x}", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()));
+
+        let num = self.reg(opcode.rs()) as i32;
+        let den = self.reg(opcode.rt()) as i32;
+
+        if den == 0
+        {
+            self.hi = num as u32;
+            self.lo = if num < 0 { 1 }  else { 0xFFFFFFFF };
+        }
+        else if num as u32 == 0x80000000 && den == -1
+        {
+            self.hi = 0;
+            self.lo = 0x80000000;
+        }
+        else
+        {
+            self.hi = (num % den) as u32;
+            self.lo = (num / den) as u32;
+        }
+    }
+
+    fn divu(&mut self, opcode: &Opcode)
+    {
+        println!("DIVU _ R{}={:08x} / R{}={:08x}", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()));
+
+        let num = self.reg(opcode.rs());
+        let den = self.reg(opcode.rt());
+
+        if den == 0
+        {
+            self.hi = num;
+            self.lo = 0xFFFFFFFF;
+        }
+        else
+        {
+            self.hi = num % den;
+            self.lo = num / den;
+        }
+    }
+
     fn addu(&mut self, opcode: &Opcode)
     {
         println!("ADDU _ R{}={:08x} + R{}={:08x} -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()), opcode.rd());
 
         let result = self.reg(opcode.rs()).wrapping_add(self.reg(opcode.rt()));
+        self.set_reg(opcode.rd(), result);
+    }
+
+    fn subu(&mut self, opcode: &Opcode)
+    {
+        println!("SUBU _ R{}={:08x} + R{}={:08x} -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()), opcode.rd());
+
+        let result = self.reg(opcode.rs()).wrapping_sub(self.reg(opcode.rt()));
         self.set_reg(opcode.rd(), result);
     }
 
@@ -282,7 +383,7 @@ impl CPU
 
         if self.reg(opcode.rs()) == self.reg(opcode.rt())
         {
-            self.pc = self.pc.wrapping_add(opcode.imm_se() << 2).wrapping_sub(4);
+            self.next_pc = self.pc.wrapping_add(opcode.imm_se() << 2);
         }
     }
 
@@ -292,7 +393,7 @@ impl CPU
 
         if self.reg(opcode.rs()) != self.reg(opcode.rt())
         {
-            self.pc = self.pc.wrapping_add(opcode.imm_se() << 2).wrapping_sub(4);
+            self.next_pc = self.pc.wrapping_add(opcode.imm_se() << 2);
         }
     }
 
@@ -304,7 +405,7 @@ impl CPU
 
         if rs > 0
         {
-            self.pc = self.pc.wrapping_add(opcode.imm_se() << 2).wrapping_sub(4);
+            self.next_pc = self.pc.wrapping_add(opcode.imm_se() << 2);
         }
     }
 
@@ -316,7 +417,7 @@ impl CPU
 
         if rs <= 0
         {
-            self.pc = self.pc.wrapping_add(opcode.imm_se() << 2).wrapping_sub(4);
+            self.next_pc = self.pc.wrapping_add(opcode.imm_se() << 2);
         }
     }
 
@@ -328,7 +429,7 @@ impl CPU
 
         if rs >= 0
         {
-            self.pc = self.pc.wrapping_add(opcode.imm_se() << 2).wrapping_sub(4);
+            self.next_pc = self.pc.wrapping_add(opcode.imm_se() << 2);
         }
     }
 
@@ -341,7 +442,7 @@ impl CPU
         if rs >= 0
         {
             self.set_reg(31, self.pc);
-            self.pc = self.pc.wrapping_add(opcode.imm_se() << 2).wrapping_sub(4);
+            self.next_pc = self.pc.wrapping_add(opcode.imm_se() << 2);
         }
     }
 
@@ -353,7 +454,7 @@ impl CPU
 
         if rs < 0
         {
-            self.pc = self.pc.wrapping_add(opcode.imm_se() << 2).wrapping_sub(4);
+            self.next_pc = self.pc.wrapping_add(opcode.imm_se() << 2);
         }
     }
 
@@ -366,7 +467,7 @@ impl CPU
         if rs < 0
         {
             self.set_reg(31, self.pc);
-            self.pc = self.pc.wrapping_add(opcode.imm_se() << 2).wrapping_sub(4);
+            self.next_pc = self.pc.wrapping_add(opcode.imm_se() << 2);
         }
     }
 
@@ -377,6 +478,8 @@ impl CPU
         let value = match opcode.rd()
         {
             12 => self.status,
+            13 => self.cause,
+            14 => self.epc,
             _  => panic!("Unsupported cop0 register: {:08x}", opcode.rd())
         };
 
@@ -400,30 +503,30 @@ impl CPU
     {
         println!("J _ {:08x}", opcode.imm26());
 
-        self.pc = (self.pc & 0xF0000000) | (opcode.imm26() << 2);
+        self.next_pc = (self.pc & 0xF0000000) | (opcode.imm26() << 2);
     }
 
     fn jal(&mut self, opcode: &Opcode)
     {
-        println!("JAL _ {:08x}", opcode.imm26());
+        println!("JAL _ shifted {:08x} = {:08x}", opcode.imm26(), (self.pc & 0xF0000000) | (opcode.imm26() << 2));
 
-        self.set_reg(31, self.pc);
-        self.pc = (self.pc & 0xF0000000) | (opcode.imm26() << 2);
+        self.set_reg(31, self.next_pc);
+        self.next_pc = (self.pc & 0xF0000000) | (opcode.imm26() << 2);
     }
 
     fn jalr(&mut self, opcode: &Opcode)
     {
         println!("JALR _ R{}={:08x}", opcode.rs(), self.reg(opcode.rs()));
 
-        self.set_reg(opcode.rd(), self.pc);
-        self.pc = self.reg(opcode.rs());
+        self.set_reg(opcode.rd(), self.next_pc);
+        self.next_pc = self.reg(opcode.rs());
     }
 
     fn jr(&mut self, opcode: &Opcode)
     {
         println!("JR _ R{}={:08x}", opcode.rs(), self.reg(opcode.rs()));
 
-        self.pc = self.reg(opcode.rs());
+        self.next_pc = self.reg(opcode.rs());
     }
 
     fn lui(&mut self, opcode: &Opcode)
@@ -517,15 +620,48 @@ impl CPU
         self.set_reg(opcode.rd(), result as u32);
     }
 
+    fn srl(&mut self, opcode: &Opcode)
+    {
+        println!("SRL _ R{} >> {} -> R{}", opcode.rt(), opcode.imm5(), opcode.rd());
+
+        let rt = self.reg(opcode.rt());
+        let result = rt >> opcode.imm5();
+        self.set_reg(opcode.rd(), result);
+    }
+
     fn slti(&mut self, opcode: &Opcode)
     {
         println!("SLTI _ R{}={:08x} < {:08x} ? -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.imm_se(), opcode.rt());
 
         let rs = self.reg(opcode.rs()) as i32;
-        let imm = self.reg(opcode.imm_se()) as i32;
+        let imm = opcode.imm_se() as i32;
 
         let result = rs < imm;
+
         self.set_reg(opcode.rt(), result as u32);
+    }
+
+    fn sltiu(&mut self, opcode: &Opcode)
+    {
+        println!("SLTIU _ R{}={:08x} < {:08x} ? -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.imm_se(), opcode.rt());
+
+        let rs = self.reg(opcode.rs());
+        let imm = opcode.imm_se();
+
+        let result = rs < imm;
+
+        self.set_reg(opcode.rt(), result as u32);
+    }
+
+    fn slt(&mut self, opcode: &Opcode)
+    {
+        println!("SLT _ R{} < R{} ? -> R{}", opcode.rs(), opcode.rt(), opcode.rd());
+
+        let rs = self.reg(opcode.rs()) as i32;
+        let rt = self.reg(opcode.rt()) as i32;
+
+        let result = rs < rt;
+        self.set_reg(opcode.rd(), result as u32);
     }
 
     fn sltu(&mut self, opcode: &Opcode)
@@ -578,5 +714,41 @@ impl CPU
 
         let address = self.reg(opcode.rs()).wrapping_add(opcode.imm_se());
         mem.write(address, self.reg(opcode.rt()));
+    }
+
+    fn mflo(&mut self, opcode: &Opcode)
+    {
+        println!("MFLO _ LO={:08x} -> R{}", self.lo, opcode.rd());
+
+        self.set_reg(opcode.rd(), self.lo);
+    }
+
+    fn mfhi(&mut self, opcode: &Opcode)
+    {
+        println!("MFHI _ HI={:08x} -> R{}", self.hi, opcode.rd());
+
+        self.set_reg(opcode.rd(), self.hi);
+    }
+
+    fn exception(&mut self, cause: Exception)
+    {
+        self.cause = (cause as u32) << 2;
+        self.epc = self.current_pc;
+
+        // Stack the exception
+        self.status = (self.status & !0x3F) | ((self.status << 2) & 0x3F);
+
+        // Two possible handler addresses depending on the status' BEV bit
+        let handler = if (self.status & (1 << 22)) != 0 { 0xBFC00180 } else { 0x80000080 };
+
+        self.pc = handler;
+        self.next_pc = handler.wrapping_add(4);
+    }
+
+    fn syscall(&mut self)
+    {
+        println!("SYSCALL");
+
+        self.exception(Exception::Syscall);
     }
 }
