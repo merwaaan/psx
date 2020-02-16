@@ -13,6 +13,8 @@ impl PSX
 {
     pub fn new(bios_path: &Path) -> Self
     {
+        env_logger::init();
+
         let mem = Memory::new(bios_path);
 
         PSX

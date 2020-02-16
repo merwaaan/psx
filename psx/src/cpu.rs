@@ -83,7 +83,10 @@ impl Opcode
 
 enum Exception
 {
-    Syscall = 0x8
+    LoadAddress = 0x4,
+    StoreAddress = 0x5,
+    Syscall = 0x8,
+    Overflow = 0xC
 }
 
 pub struct CPU
@@ -106,9 +109,14 @@ pub struct CPU
     cause: u32,
     epc: u32,
 
+    //
+    branching: bool,
+    in_delay_slot: bool,
+
     counter: u32,
 
-    log_file: File
+    log_file: File,
+    logging: bool
 }
 
 impl CPU
@@ -132,9 +140,13 @@ impl CPU
             cause: 0,
             epc: 0,
 
+            branching: false,
+            in_delay_slot: false,
+
             counter: 0,
 
-            log_file: File::create("custom_log_own.txt").unwrap()
+            log_file: File::create("custom_log_own.txt").unwrap(),
+            logging: false
         }
     }
 
@@ -145,17 +157,32 @@ impl CPU
         self.set_reg(self.pending_load.0, self.pending_load.1);
         self.pending_load = (0, 0);
 
+        //
+
+        self.in_delay_slot = self.branching;
+        self.branching = false;
+
         // Fetch the next instruction
 
         self.current_pc = self.pc;
+
+        if self.current_pc % 4 != 0
+        {
+            self.exception(Exception::LoadAddress);
+            return;
+        }
+
         let opcode = mem.read(self.pc); // TODO directly Opcode, need to impl to str
 
         self.pc = self.next_pc;
         self.next_pc = self.pc.wrapping_add(4);
 
-        if self.counter > 2695640
+        if self.counter > 2695600 + 5195443
         {
             // debug logging
+
+            write!(&mut self.log_file, "{:08x} {:08x} \n", self.current_pc, opcode).unwrap();
+
     /*
             write!(&mut self.log_file, "{:08x} {:08x} ", self.current_pc, opcode).unwrap();
             for i in 0 .. 32
@@ -168,11 +195,18 @@ impl CPU
 
             for i in 0 .. 32
             {
-                println!("\tR{} = {:08x}", i, self.r[i]);
+                debug!("\tR{} = {:08x}", i, self.r[i]);
             }
     */
-            println!("\nopcode {:08x} @ {:08x} | {:b} | {}", opcode, self.current_pc, self.status, self.counter);
+
+            self.logging = true;
         }
+
+        if self.logging
+        {
+            debug!("\nopcode {:08x} @ {:08x} | {:b} | {}", opcode, self.current_pc, self.status, self.counter);
+        }
+
         self.counter += 1;
 
         match Opcode(opcode).instr()
@@ -184,11 +218,15 @@ impl CPU
                     0b000000 => self.sll(&Opcode(opcode)),
                     0b000010 => self.srl(&Opcode(opcode)),
                     0b000011 => self.sra(&Opcode(opcode)),
+                    0b000100 => self.sllv(&Opcode(opcode)),
+                    0b000111 => self.srav(&Opcode(opcode)),
                     0b001000 => self.jr(&Opcode(opcode)),
                     0b001001 => self.jalr(&Opcode(opcode)),
                     0b001100 => self.syscall(),
                     0b010000 => self.mfhi(&Opcode(opcode)),
+                    0b010001 => self.mthi(&Opcode(opcode)),
                     0b010010 => self.mflo(&Opcode(opcode)),
+                    0b010011 => self.mtlo(&Opcode(opcode)),
                     0b011010 => self.div(&Opcode(opcode)),
                     0b011011 => self.divu(&Opcode(opcode)),
                     0b100000 => self.add(&Opcode(opcode)),
@@ -196,6 +234,7 @@ impl CPU
                     0b100011 => self.subu(&Opcode(opcode)),
                     0b100100 => self.and(&Opcode(opcode)),
                     0b100101 => self.or(&Opcode(opcode)),
+                    0b100111 => self.nor(&Opcode(opcode)),
                     0b101010 => self.slt(&Opcode(opcode)),
                     0b101011 => self.sltu(&Opcode(opcode)),
                     _        => panic!("Unsupported opcode: {:08x}", opcode)
@@ -231,12 +270,15 @@ impl CPU
                 {
                     0b00000 => self.cop0_mfc(&Opcode(opcode)),
                     0b00100 => self.cop0_mtc(&Opcode(opcode)),
+                    0b10000 => self.cop0_rfe(),
                     _        => panic!("Unsupported opcode: {:08x}", opcode)
                 }
             },
             0b100000 => self.lb(mem, &Opcode(opcode)),
+            0b100001 => self.lh(mem, &Opcode(opcode)),
             0b100011 => self.lw(mem, &Opcode(opcode)),
             0b100100 => self.lbu(mem, &Opcode(opcode)),
+            0b100101 => self.lhu(mem, &Opcode(opcode)),
             0b101000 => self.sb(mem, &Opcode(opcode)),
             0b101001 => self.sh(mem, &Opcode(opcode)),
             0b101011 => self.sw(mem, &Opcode(opcode)),
@@ -264,23 +306,21 @@ impl CPU
 
     fn addi(&mut self, opcode: &Opcode)
     {
-        println!("ADDI _ R{}={:08x} + {:08x} = {:08x} -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.imm_se(), self.reg(opcode.rs()).wrapping_add(opcode.imm_se()), opcode.rt());
+        trace!("ADDI _ R{}={:08x} + {:08x} = {:08x} -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.imm_se(), self.reg(opcode.rs()).wrapping_add(opcode.imm_se()), opcode.rt());
 
         let rs = self.reg(opcode.rs()) as i32;
         let imm = opcode.imm_se() as i32;
 
-        let result = match rs.checked_add(imm)
+        match rs.checked_add(imm)
         {
-            Some(result) => result as u32,
-            None         => panic!("ADDI overflow")
+            Some(result) => self.set_reg(opcode.rt(), result as u32),
+            None         => self.exception(Exception::Overflow)
         };
-
-        self.set_reg(opcode.rt(), result);
     }
 
     fn addiu(&mut self, opcode: &Opcode)
     {
-        println!("ADDIU _ R{}={:08x} + {:08x} = {:08x} -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.imm_se(), self.reg(opcode.rs()).wrapping_add(opcode.imm_se()), opcode.rt());
+        trace!("ADDIU _ R{}={:08x} + {:08x} = {:08x} -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.imm_se(), self.reg(opcode.rs()).wrapping_add(opcode.imm_se()), opcode.rt());
 
         let result = self.reg(opcode.rs()).wrapping_add(opcode.imm_se());
         self.set_reg(opcode.rt(), result);
@@ -288,23 +328,21 @@ impl CPU
 
     fn add(&mut self, opcode: &Opcode)
     {
-        println!("ADD _ R{}={:08x} + R{}={:08x} -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()), opcode.rd());
+        trace!("ADD _ R{}={:08x} + R{}={:08x} -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()), opcode.rd());
 
         let rs = self.reg(opcode.rs()) as i32;
         let rt = self.reg(opcode.rt()) as i32;
 
-        let result = match rs.checked_add(rt)
+        match rs.checked_add(rt)
         {
-            Some(result) => result as u32,
-            None         => panic!("ADD overflow")
+            Some(result) => self.set_reg(opcode.rd(), result as u32),
+            None         => self.exception(Exception::Overflow)
         };
-
-        self.set_reg(opcode.rd(), result);
     }
 
     fn div(&mut self, opcode: &Opcode)
     {
-        println!("DIV _ R{}={:08x} / R{}={:08x}", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()));
+        trace!("DIV _ R{}={:08x} / R{}={:08x}", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()));
 
         let num = self.reg(opcode.rs()) as i32;
         let den = self.reg(opcode.rt()) as i32;
@@ -328,7 +366,7 @@ impl CPU
 
     fn divu(&mut self, opcode: &Opcode)
     {
-        println!("DIVU _ R{}={:08x} / R{}={:08x}", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()));
+        trace!("DIVU _ R{}={:08x} / R{}={:08x}", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()));
 
         let num = self.reg(opcode.rs());
         let den = self.reg(opcode.rt());
@@ -347,7 +385,7 @@ impl CPU
 
     fn addu(&mut self, opcode: &Opcode)
     {
-        println!("ADDU _ R{}={:08x} + R{}={:08x} -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()), opcode.rd());
+        trace!("ADDU _ R{}={:08x} + R{}={:08x} -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()), opcode.rd());
 
         let result = self.reg(opcode.rs()).wrapping_add(self.reg(opcode.rt()));
         self.set_reg(opcode.rd(), result);
@@ -355,7 +393,7 @@ impl CPU
 
     fn subu(&mut self, opcode: &Opcode)
     {
-        println!("SUBU _ R{}={:08x} + R{}={:08x} -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()), opcode.rd());
+        trace!("SUBU _ R{}={:08x} + R{}={:08x} -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()), opcode.rd());
 
         let result = self.reg(opcode.rs()).wrapping_sub(self.reg(opcode.rt()));
         self.set_reg(opcode.rd(), result);
@@ -363,7 +401,7 @@ impl CPU
 
     fn and(&mut self, opcode: &Opcode)
     {
-        println!("AND _ R{}={:08x} & R{}={:08x} = {:08x} -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()), self.reg(opcode.rs()) & opcode.rt(), opcode.rd());
+        trace!("AND _ R{}={:08x} & R{}={:08x} = {:08x} -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()), self.reg(opcode.rs()) & opcode.rt(), opcode.rd());
 
         let result = self.reg(opcode.rs()) & self.reg(opcode.rt());
         self.set_reg(opcode.rd(), result);
@@ -371,7 +409,7 @@ impl CPU
 
     fn andi(&mut self, opcode: &Opcode)
     {
-        println!("ANDI _ R{}={:08x} & {:08x} = {:08x} -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.imm(), self.reg(opcode.rs()) & opcode.imm(), opcode.rt());
+        trace!("ANDI _ R{}={:08x} & {:08x} = {:08x} -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.imm(), self.reg(opcode.rs()) & opcode.imm(), opcode.rt());
 
         let result = self.reg(opcode.rs()) & opcode.imm();
         self.set_reg(opcode.rt(), result);
@@ -379,27 +417,31 @@ impl CPU
 
     fn beq(&mut self, opcode: &Opcode)
     {
-        println!("BEQ _ branch to PC + {:08x} << 2 = {:08x} if R{}={:08x} == R{}={:08x}", opcode.imm_se(), self.pc.wrapping_add(opcode.imm_se() << 2), opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()));
+        trace!("BEQ _ branch to PC + {:08x} << 2 = {:08x} if R{}={:08x} == R{}={:08x}", opcode.imm_se(), self.pc.wrapping_add(opcode.imm_se() << 2), opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()));
 
         if self.reg(opcode.rs()) == self.reg(opcode.rt())
         {
             self.next_pc = self.pc.wrapping_add(opcode.imm_se() << 2);
         }
+
+        self.branching = true;
     }
 
     fn bne(&mut self, opcode: &Opcode)
     {
-        println!("BNE _ branch to PC + {:08x} << 2 = {:08x} if R{}={:08x} != R{}={:08x}", opcode.imm_se(), self.pc.wrapping_add(opcode.imm_se() << 2), opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()));
+        trace!("BNE _ branch to PC + {:08x} << 2 = {:08x} if R{}={:08x} != R{}={:08x}", opcode.imm_se(), self.pc.wrapping_add(opcode.imm_se() << 2), opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()));
 
         if self.reg(opcode.rs()) != self.reg(opcode.rt())
         {
             self.next_pc = self.pc.wrapping_add(opcode.imm_se() << 2);
         }
+
+        self.branching = true;
     }
 
     fn bgtz(&mut self, opcode: &Opcode)
     {
-        println!("BGTZ _ branch to PC + {:08x} << 2 = {:08x} if R{}={:08x} > 0", opcode.imm_se(), self.pc.wrapping_add(opcode.imm_se() << 2), opcode.rs(), self.reg(opcode.rs()));
+        trace!("BGTZ _ branch to PC + {:08x} << 2 = {:08x} if R{}={:08x} > 0", opcode.imm_se(), self.pc.wrapping_add(opcode.imm_se() << 2), opcode.rs(), self.reg(opcode.rs()));
 
         let rs = self.reg(opcode.rs()) as i32;
 
@@ -407,11 +449,13 @@ impl CPU
         {
             self.next_pc = self.pc.wrapping_add(opcode.imm_se() << 2);
         }
+
+        self.branching = true;
     }
 
     fn blez(&mut self, opcode: &Opcode)
     {
-        println!("BLEZ _ branch to PC + {:08x} << 2 = {:08x} if R{}={:08x} <= 0", opcode.imm_se(), self.pc.wrapping_add(opcode.imm_se() << 2), opcode.rs(), self.reg(opcode.rs()));
+        trace!("BLEZ _ branch to PC + {:08x} << 2 = {:08x} if R{}={:08x} <= 0", opcode.imm_se(), self.pc.wrapping_add(opcode.imm_se() << 2), opcode.rs(), self.reg(opcode.rs()));
 
         let rs = self.reg(opcode.rs()) as i32;
 
@@ -419,11 +463,13 @@ impl CPU
         {
             self.next_pc = self.pc.wrapping_add(opcode.imm_se() << 2);
         }
+
+        self.branching = true;
     }
 
     fn bgez(&mut self, opcode: &Opcode)
     {
-        println!("BGEZ _ branch to PC + {:08x} << 2 = {:08x} if R{}={:08x} >= 0", opcode.imm_se(), self.pc.wrapping_add(opcode.imm_se() << 2), opcode.rs(), self.reg(opcode.rs()));
+        trace!("BGEZ _ branch to PC + {:08x} << 2 = {:08x} if R{}={:08x} >= 0", opcode.imm_se(), self.pc.wrapping_add(opcode.imm_se() << 2), opcode.rs(), self.reg(opcode.rs()));
 
         let rs = self.reg(opcode.rs()) as i32;
 
@@ -431,11 +477,13 @@ impl CPU
         {
             self.next_pc = self.pc.wrapping_add(opcode.imm_se() << 2);
         }
+
+        self.branching = true;
     }
 
     fn bgezal(&mut self, opcode: &Opcode)
     {
-        println!("BGEZAL _ branch to PC + {:08x} << 2 = {:08x} if R{}={:08x} >= 0", opcode.imm_se(), self.pc.wrapping_add(opcode.imm_se() << 2), opcode.rs(), self.reg(opcode.rs()));
+        trace!("BGEZAL _ branch to PC + {:08x} << 2 = {:08x} if R{}={:08x} >= 0", opcode.imm_se(), self.pc.wrapping_add(opcode.imm_se() << 2), opcode.rs(), self.reg(opcode.rs()));
 
         let rs = self.reg(opcode.rs()) as i32;
 
@@ -444,11 +492,13 @@ impl CPU
             self.set_reg(31, self.pc);
             self.next_pc = self.pc.wrapping_add(opcode.imm_se() << 2);
         }
+
+        self.branching = true;
     }
 
     fn bltz(&mut self, opcode: &Opcode)
     {
-        println!("BLTZ _ branch to PC + {:08x} << 2 = {:08x} if R{}={:08x} < 0", opcode.imm_se(), self.pc.wrapping_add(opcode.imm_se() << 2), opcode.rs(), self.reg(opcode.rs()));
+        trace!("BLTZ _ branch to PC + {:08x} << 2 = {:08x} if R{}={:08x} < 0", opcode.imm_se(), self.pc.wrapping_add(opcode.imm_se() << 2), opcode.rs(), self.reg(opcode.rs()));
 
         let rs = self.reg(opcode.rs()) as i32;
 
@@ -456,11 +506,13 @@ impl CPU
         {
             self.next_pc = self.pc.wrapping_add(opcode.imm_se() << 2);
         }
+
+        self.branching = true;
     }
 
     fn bltzal(&mut self, opcode: &Opcode)
     {
-        println!("BLTZAL _ branch to PC + {:08x} << 2 = {:08x} if R{}={:08x} < 0", opcode.imm_se(), self.pc.wrapping_add(opcode.imm_se() << 2), opcode.rs(), self.reg(opcode.rs()));
+        trace!("BLTZAL _ branch to PC + {:08x} << 2 = {:08x} if R{}={:08x} < 0", opcode.imm_se(), self.pc.wrapping_add(opcode.imm_se() << 2), opcode.rs(), self.reg(opcode.rs()));
 
         let rs = self.reg(opcode.rs()) as i32;
 
@@ -469,11 +521,13 @@ impl CPU
             self.set_reg(31, self.pc);
             self.next_pc = self.pc.wrapping_add(opcode.imm_se() << 2);
         }
+
+        self.branching = true;
     }
 
     fn cop0_mfc(&mut self, opcode: &Opcode)
     {
-        println!("COP0 MFC | COP R{} -> R{}", opcode.rd(), opcode.rt());
+        trace!("COP0 MFC | COP R{} -> R{}", opcode.rd(), opcode.rt());
 
         let value = match opcode.rd()
         {
@@ -489,60 +543,71 @@ impl CPU
 
     fn cop0_mtc(&mut self, opcode: &Opcode)
     {
-        println!("COP0 MTC | R{} = {:08x} -> COP R{}", opcode.rt(), self.reg(opcode.rt()), opcode.rd());
+        trace!("COP0 MTC | R{} = {:08x} -> COP R{}", opcode.rt(), self.reg(opcode.rt()), opcode.rd());
 
         match opcode.rd()
         {
-            3 | 5 | 6 | 7| 9 | 11 | 13 => println!("Ignored write to CR{}", opcode.rd()),
+            3 | 5 | 6 | 7| 9 | 11 | 13 => trace!("Ignored write to CR{}", opcode.rd()),
             12 => self.status = self.reg(opcode.rt()),
             _  => panic!("Unsupported cop0 register: {:08x}", opcode.rd())
         };
     }
 
+    fn cop0_rfe(&mut self)
+    {
+        trace!("COP0 RFE");
+
+        self.status = (self.status & !0x3F) | ((self.status & 0x3F) >> 2);
+    }
+
     fn j(&mut self, opcode: &Opcode)
     {
-        println!("J _ {:08x}", opcode.imm26());
+        trace!("J _ {:08x}", opcode.imm26());
 
         self.next_pc = (self.pc & 0xF0000000) | (opcode.imm26() << 2);
+        self.branching = true;
     }
 
     fn jal(&mut self, opcode: &Opcode)
     {
-        println!("JAL _ shifted {:08x} = {:08x}", opcode.imm26(), (self.pc & 0xF0000000) | (opcode.imm26() << 2));
+        trace!("JAL _ shifted {:08x} = {:08x}", opcode.imm26(), (self.pc & 0xF0000000) | (opcode.imm26() << 2));
 
         self.set_reg(31, self.next_pc);
         self.next_pc = (self.pc & 0xF0000000) | (opcode.imm26() << 2);
+        self.branching = true;
     }
 
     fn jalr(&mut self, opcode: &Opcode)
     {
-        println!("JALR _ R{}={:08x}", opcode.rs(), self.reg(opcode.rs()));
+        trace!("JALR _ R{}={:08x}", opcode.rs(), self.reg(opcode.rs()));
 
         self.set_reg(opcode.rd(), self.next_pc);
         self.next_pc = self.reg(opcode.rs());
+        self.branching = true;
     }
 
     fn jr(&mut self, opcode: &Opcode)
     {
-        println!("JR _ R{}={:08x}", opcode.rs(), self.reg(opcode.rs()));
+        trace!("JR _ R{}={:08x}", opcode.rs(), self.reg(opcode.rs()));
 
         self.next_pc = self.reg(opcode.rs());
+        self.branching = true;
     }
 
     fn lui(&mut self, opcode: &Opcode)
     {
-        println!("LUI _ {:08x} << 16 = {:08x} -> R{}", opcode.imm(), opcode.imm() << 16, opcode.rt());
+        trace!("LUI _ {:08x} << 16 = {:08x} -> R{}", opcode.imm(), opcode.imm() << 16, opcode.rt());
 
         self.set_reg(opcode.rt(), opcode.imm() << 16);
     }
 
     fn lb(&mut self, mem: &mut Memory, opcode: &Opcode)
     {
-        println!("LB _ {:08x}(R{})={:08x} -> R{}", opcode.imm_se(), opcode.rs(), self.reg(opcode.rs()).wrapping_add(opcode.imm_se()), opcode.rt());
+        trace!("LB _ {:08x}(R{})={:08x} -> R{}", opcode.imm_se(), opcode.rs(), self.reg(opcode.rs()).wrapping_add(opcode.imm_se()), opcode.rt());
 
         if self.status & 0x10000 != 0
         {
-            println!("Cache is isolated, ignoring");
+            trace!("Cache is isolated, ignoring");
             return;
         }
 
@@ -555,11 +620,11 @@ impl CPU
 
     fn lbu(&mut self, mem: &mut Memory, opcode: &Opcode)
     {
-        println!("LBU _ {:08x}(R{})={:08x} -> R{}", opcode.imm_se(), opcode.rs(), self.reg(opcode.rs()).wrapping_add(opcode.imm_se()), opcode.rt());
+        trace!("LBU _ {:08x}(R{})={:08x} -> R{}", opcode.imm_se(), opcode.rs(), self.reg(opcode.rs()).wrapping_add(opcode.imm_se()), opcode.rt());
 
         if self.status & 0x10000 != 0
         {
-            println!("Cache is isolated, ignoring");
+            trace!("Cache is isolated, ignoring");
             return;
         }
 
@@ -570,33 +635,94 @@ impl CPU
         self.pending_load = (opcode.rt(), result as u32);
     }
 
-    fn lw(&mut self, mem: &mut Memory, opcode: &Opcode)
+    fn lh(&mut self, mem: &mut Memory, opcode: &Opcode)
     {
-        println!("LW _ {:08x}(R{})={:08x} -> R{}", opcode.imm_se(), opcode.rs(), self.reg(opcode.rs()).wrapping_add(opcode.imm_se()), opcode.rt());
+        trace!("LH _ {:08x}(R{})={:08x} -> R{}", opcode.imm_se(), opcode.rs(), self.reg(opcode.rs()).wrapping_add(opcode.imm_se()), opcode.rt());
 
         if self.status & 0x10000 != 0
         {
-            println!("Cache is isolated, ignoring");
+            trace!("Cache is isolated, ignoring");
             return;
         }
 
-        let result = mem.read(self.reg(opcode.rs()).wrapping_add(opcode.imm_se()));
+        let address = self.reg(opcode.rs()).wrapping_add(opcode.imm_se());
 
-        // Put in the load-delay slot
-        self.pending_load = (opcode.rt(), result);
+        if address % 2 == 0
+        {
+            let result = mem.read16(address) as i16;
+            self.pending_load = (opcode.rt(), result as u32); // in the load-delay slot
+        }
+        else
+        {
+            self.exception(Exception::LoadAddress);
+        }
+    }
+
+    fn lhu(&mut self, mem: &mut Memory, opcode: &Opcode)
+    {
+        trace!("LHU _ {:08x}(R{})={:08x} -> R{}", opcode.imm_se(), opcode.rs(), self.reg(opcode.rs()).wrapping_add(opcode.imm_se()), opcode.rt());
+
+        if self.status & 0x10000 != 0
+        {
+            trace!("Cache is isolated, ignoring");
+            return;
+        }
+
+        let address = self.reg(opcode.rs()).wrapping_add(opcode.imm_se());
+
+        if address % 2 == 0
+        {
+            let result = mem.read16(address);
+            self.pending_load = (opcode.rt(), result as u32); // in the load-delay slot
+        }
+        else
+        {
+            self.exception(Exception::LoadAddress);
+        }
+    }
+
+    fn lw(&mut self, mem: &mut Memory, opcode: &Opcode)
+    {
+        trace!("LW _ {:08x}(R{})={:08x} -> R{}", opcode.imm_se(), opcode.rs(), self.reg(opcode.rs()).wrapping_add(opcode.imm_se()), opcode.rt());
+
+        if self.status & 0x10000 != 0
+        {
+            trace!("Cache is isolated, ignoring");
+            return;
+        }
+
+        let address = self.reg(opcode.rs()).wrapping_add(opcode.imm_se());
+
+        if address % 4 == 0
+        {
+            let value = mem.read(address);
+            self.pending_load = (opcode.rt(), value); // in the load-delay slot
+        }
+        else
+        {
+            self.exception(Exception::LoadAddress);
+        }
     }
 
     fn or(&mut self, opcode: &Opcode)
     {
-        println!("OR _ R{}={:08x} | R{}={:08x} = {:08x} -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()), self.reg(opcode.rt()) | self.reg(opcode.rs()), opcode.rd());
+        trace!("OR _ R{}={:08x} | R{}={:08x} = {:08x} -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()), self.reg(opcode.rt()) | self.reg(opcode.rs()), opcode.rd());
 
         let result = self.reg(opcode.rt()) | self.reg(opcode.rs());
         self.set_reg(opcode.rd(), result);
     }
 
+    fn nor(&mut self, opcode: &Opcode)
+    {
+        trace!("NOR _ ! R{}={:08x} | R{}={:08x} = {:08x} -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()), self.reg(opcode.rt()) | self.reg(opcode.rs()), opcode.rd());
+
+        let result = !(self.reg(opcode.rt()) | self.reg(opcode.rs()));
+        self.set_reg(opcode.rd(), result);
+    }
+
     fn ori(&mut self, opcode: &Opcode)
     {
-        println!("ORI");
+        trace!("ORI");
 
         let result = self.reg(opcode.rs()) | opcode.imm();
         self.set_reg(opcode.rt(), result);
@@ -604,16 +730,36 @@ impl CPU
 
     fn sll(&mut self, opcode: &Opcode)
     {
-        println!("SLL _ R{} << {} -> R{}", opcode.rt(), opcode.imm5(), opcode.rd());
+        trace!("SLL _ R{} << {} -> R{}", opcode.rt(), opcode.imm5(), opcode.rd());
 
         let result = self.reg(opcode.rt()) << opcode.imm5();
         self.set_reg(opcode.rd(), result);
 
     }
 
+    fn sllv(&mut self, opcode: &Opcode)
+    {
+        trace!("SLLV _ R{} << {} -> R{}", opcode.rt(), self.reg(opcode.rs()) & 0b11111, opcode.rd());
+
+        let shift = self.reg(opcode.rs()) & 0b11111;
+        let result = (self.reg(opcode.rt()) as i32) >> shift;
+        self.set_reg(opcode.rd(), result as u32);
+
+    }
+
+    fn srav(&mut self, opcode: &Opcode)
+    {
+        trace!("SRAV _ R{} >> {} -> R{}", opcode.rt(), self.reg(opcode.rs()) & 0b11111, opcode.rd());
+
+        let shift = self.reg(opcode.rs()) & 0b11111;
+        let result = self.reg(opcode.rt()) << shift;
+        self.set_reg(opcode.rd(), result);
+
+    }
+
     fn sra(&mut self, opcode: &Opcode)
     {
-        println!("SRA _ R{} >> {} -> R{}", opcode.rt(), opcode.imm5(), opcode.rd());
+        trace!("SRA _ R{} >> {} -> R{}", opcode.rt(), opcode.imm5(), opcode.rd());
 
         let rt = self.reg(opcode.rt()) as i32;
         let result = rt >> opcode.imm5();
@@ -622,7 +768,7 @@ impl CPU
 
     fn srl(&mut self, opcode: &Opcode)
     {
-        println!("SRL _ R{} >> {} -> R{}", opcode.rt(), opcode.imm5(), opcode.rd());
+        trace!("SRL _ R{} >> {} -> R{}", opcode.rt(), opcode.imm5(), opcode.rd());
 
         let rt = self.reg(opcode.rt());
         let result = rt >> opcode.imm5();
@@ -631,7 +777,7 @@ impl CPU
 
     fn slti(&mut self, opcode: &Opcode)
     {
-        println!("SLTI _ R{}={:08x} < {:08x} ? -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.imm_se(), opcode.rt());
+        trace!("SLTI _ R{}={:08x} < {:08x} ? -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.imm_se(), opcode.rt());
 
         let rs = self.reg(opcode.rs()) as i32;
         let imm = opcode.imm_se() as i32;
@@ -643,7 +789,7 @@ impl CPU
 
     fn sltiu(&mut self, opcode: &Opcode)
     {
-        println!("SLTIU _ R{}={:08x} < {:08x} ? -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.imm_se(), opcode.rt());
+        trace!("SLTIU _ R{}={:08x} < {:08x} ? -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.imm_se(), opcode.rt());
 
         let rs = self.reg(opcode.rs());
         let imm = opcode.imm_se();
@@ -655,7 +801,7 @@ impl CPU
 
     fn slt(&mut self, opcode: &Opcode)
     {
-        println!("SLT _ R{} < R{} ? -> R{}", opcode.rs(), opcode.rt(), opcode.rd());
+        trace!("SLT _ R{} < R{} ? -> R{}", opcode.rs(), opcode.rt(), opcode.rd());
 
         let rs = self.reg(opcode.rs()) as i32;
         let rt = self.reg(opcode.rt()) as i32;
@@ -666,7 +812,7 @@ impl CPU
 
     fn sltu(&mut self, opcode: &Opcode)
     {
-        println!("SLTU _ R{} < R{} ? -> R{}", opcode.rs(), opcode.rt(), opcode.rd());
+        trace!("SLTU _ R{} < R{} ? -> R{}", opcode.rs(), opcode.rt(), opcode.rd());
 
         let result = self.reg(opcode.rs()) < self.reg(opcode.rt());
         self.set_reg(opcode.rd(), result as u32);
@@ -674,11 +820,11 @@ impl CPU
 
     fn sb(&mut self, mem: &mut Memory, opcode: &Opcode)
     {
-        println!("SB _ R{}={:08x} -> {:08x}(R{}={:08x})={:08x}", opcode.rt(), self.reg(opcode.rt()), opcode.imm_se(), opcode.rs(), self.reg(opcode.rs()), self.reg(opcode.rs()).wrapping_add(opcode.imm_se()));
+        trace!("SB _ R{}={:08x} -> {:08x}(R{}={:08x})={:08x}", opcode.rt(), self.reg(opcode.rt()), opcode.imm_se(), opcode.rs(), self.reg(opcode.rs()), self.reg(opcode.rs()).wrapping_add(opcode.imm_se()));
 
         if self.status & 0x10000 != 0
         {
-            println!("Cache is isolated, ignoring");
+            debug!("Cache is isolated, ignoring");
             return;
         }
 
@@ -689,51 +835,91 @@ impl CPU
 
     fn sh(&mut self, mem: &mut Memory, opcode: &Opcode)
     {
-        println!("SH _ R{}={:08x} -> {:08x}(R{}={:08x})={:08x}", opcode.rt(), self.reg(opcode.rt()), opcode.imm_se(), opcode.rs(), self.reg(opcode.rs()), self.reg(opcode.rs()).wrapping_add(opcode.imm_se()));
+        trace!("SH _ R{}={:08x} -> {:08x}(R{}={:08x})={:08x}", opcode.rt(), self.reg(opcode.rt()), opcode.imm_se(), opcode.rs(), self.reg(opcode.rs()), self.reg(opcode.rs()).wrapping_add(opcode.imm_se()));
 
         if self.status & 0x10000 != 0
         {
-            println!("Cache is isolated, ignoring");
+            debug!("Cache is isolated, ignoring");
             return;
         }
 
         let address = self.reg(opcode.rs()).wrapping_add(opcode.imm_se());
-        let value = self.reg(opcode.rt()) as u16;
-        mem.write16(address, value);
+
+        if address % 2 == 0
+        {
+            let value = self.reg(opcode.rt()) as u16;
+            mem.write16(address, value);
+        }
+        else
+        {
+            self.exception(Exception::StoreAddress);
+        }
     }
 
     fn sw(&mut self, mem: &mut Memory, opcode: &Opcode)
     {
-        println!("SW _ R{}={:08x} -> {:08x}(R{}={:08x})={:08x}", opcode.rt(), self.reg(opcode.rt()), opcode.imm_se(), opcode.rs(), self.reg(opcode.rs()), self.reg(opcode.rs()).wrapping_add(opcode.imm_se()));
+        trace!("SW _ R{}={:08x} -> {:08x}(R{}={:08x})={:08x}", opcode.rt(), self.reg(opcode.rt()), opcode.imm_se(), opcode.rs(), self.reg(opcode.rs()), self.reg(opcode.rs()).wrapping_add(opcode.imm_se()));
 
         if self.status & 0x10000 != 0
         {
-            println!("Cache is isolated, ignoring");
+            debug!("Cache is isolated, ignoring");
             return;
         }
 
         let address = self.reg(opcode.rs()).wrapping_add(opcode.imm_se());
-        mem.write(address, self.reg(opcode.rt()));
+
+        if address % 4 == 0
+        {
+            let value = self.reg(opcode.rt());
+            mem.write(address, value);
+        }
+        else
+        {
+            self.exception(Exception::StoreAddress);
+        }
     }
 
     fn mflo(&mut self, opcode: &Opcode)
     {
-        println!("MFLO _ LO={:08x} -> R{}", self.lo, opcode.rd());
+        trace!("MFLO _ LO={:08x} -> R{}", self.lo, opcode.rd());
 
         self.set_reg(opcode.rd(), self.lo);
     }
 
     fn mfhi(&mut self, opcode: &Opcode)
     {
-        println!("MFHI _ HI={:08x} -> R{}", self.hi, opcode.rd());
+        trace!("MFHI _ HI={:08x} -> R{}", self.hi, opcode.rd());
 
         self.set_reg(opcode.rd(), self.hi);
     }
 
+    fn mtlo(&mut self, opcode: &Opcode)
+    {
+        trace!("MTLO _ R{} -> LO={:08x}", opcode.rd(), self.lo);
+
+        self.lo = self.reg(opcode.rd());
+    }
+
+    fn mthi(&mut self, opcode: &Opcode)
+    {
+        trace!("MTHI _ R{} -> HI={:08x}", opcode.rd(), self.hi);
+
+        self.hi = self.reg(opcode.rd());
+    }
+
     fn exception(&mut self, cause: Exception)
     {
-        self.cause = (cause as u32) << 2;
         self.epc = self.current_pc;
+        self.cause = (cause as u32) << 2;
+
+        // Special case when branching:
+        //   - the branch instruction is put in EPC instead of the current one
+        //   - bit 31 of CAUSE is set
+        if self.in_delay_slot
+        {
+            self.epc = self.epc.wrapping_sub(4);
+            self.cause |= 1 << 31;
+        }
 
         // Stack the exception
         self.status = (self.status & !0x3F) | ((self.status << 2) & 0x3F);
@@ -747,7 +933,7 @@ impl CPU
 
     fn syscall(&mut self)
     {
-        println!("SYSCALL");
+        trace!("SYSCALL");
 
         self.exception(Exception::Syscall);
     }

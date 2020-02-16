@@ -13,7 +13,7 @@ impl BIOS
 {
     pub fn new(path: &Path) -> Self
     {
-        println!("Loading BIOS: \"{}\"", path.display());
+        //println!("Loading BIOS: \"{}\"", path.display());
 
         let mut buffer = Vec::new();
 
@@ -28,7 +28,7 @@ impl BIOS
 
     pub fn read8(&self, addr: u32) -> u8
     {
-        println!("BIOS read8 @ {:08x}", addr);
+        //println!("BIOS read8 @ {:08x}", addr);
 
         let offset = addr as usize;
         self.data[offset]
@@ -36,7 +36,7 @@ impl BIOS
 
     pub fn read(&self, addr: u32) -> u32
     {
-        println!("BIOS read @ {:08x}", addr);
+        //println!("BIOS read @ {:08x}", addr);
 
         let offset = addr as usize;
 
