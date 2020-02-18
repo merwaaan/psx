@@ -8,7 +8,8 @@ use imgui_glium_renderer::Renderer;
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
 use std::time::Instant;
 
-pub struct System {
+pub struct System
+{
     pub event_loop: EventLoop<()>,
     pub display: glium::Display,
     pub imgui: Context,
@@ -17,11 +18,14 @@ pub struct System {
     pub font_size: f32,
 }
 
-pub fn init(title: &str) -> System {
-    let title = match title.rfind('/') {
+pub fn init(title: &str) -> System
+{
+    let title = match title.rfind('/')
+    {
         Some(idx) => title.split_at(idx + 1).1,
         None => title,
     };
+
     let event_loop = EventLoop::new();
     let context = glutin::ContextBuilder::new().with_vsync(true);
     let builder = WindowBuilder::new()
@@ -64,7 +68,8 @@ pub fn init(title: &str) -> System {
 
     let renderer = Renderer::init(&mut imgui, &display).expect("Failed to initialize renderer");
 
-    System {
+    System
+    {
         event_loop,
         display,
         imgui,
@@ -74,9 +79,12 @@ pub fn init(title: &str) -> System {
     }
 }
 
-impl System {
-    pub fn main_loop<F: FnMut(&mut bool, &mut Ui) + 'static>(self, mut run_ui: F) {
-        let System {
+impl System
+{
+    pub fn main_loop<F: FnMut(&mut bool, &mut Ui) + 'static>(self, mut run_ui: F)
+    {
+        let System
+        {
             event_loop,
             display,
             mut imgui,
@@ -84,6 +92,7 @@ impl System {
             mut renderer,
             ..
         } = self;
+
         let mut last_frame = Instant::now();
 
         event_loop.run(move |event, _, control_flow| match event {

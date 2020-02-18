@@ -2,6 +2,7 @@ pub mod psx;
 
 mod bios;
 mod cpu;
+mod debugger;
 mod memory;
 
 #[macro_use]

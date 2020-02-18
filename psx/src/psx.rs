@@ -5,8 +5,8 @@ use std::path::Path;
 
 pub struct PSX
 {
-    mem: Memory,
-    cpu: CPU
+    pub mem: Memory,
+    pub cpu: CPU
 }
 
 impl PSX
@@ -31,6 +31,6 @@ impl PSX
 
     pub fn step(&mut self)
     {
-        self.cpu.step(&mut self.mem);
+        self.cpu.run(&mut self.mem);
     }
 }

@@ -6,12 +6,13 @@
 //
 // CONTINUE: seems OK until 83815
 
+use crate::debugger::Debugger;
 use crate::memory::Memory;
 
 use std::fs::File;
 use std::io::Write;
 
-struct Opcode(u32);
+pub struct Opcode(u32);
 
 impl Opcode
 {
@@ -91,14 +92,14 @@ enum Exception
 
 pub struct CPU
 {
-    pc: u32,
+    pub pc: u32,
     next_pc: u32,
 
-    r: [u32; 32],
+    pub r: [u32; 32],
     r_out: [u32; 32], // To simulate the load-delay slot
 
-    hi: u32,
-    lo: u32,
+    pub hi: u32,
+    pub lo: u32,
 
     pending_load: (u32, u32), // (register, value)
 
@@ -116,7 +117,9 @@ pub struct CPU
     counter: u32,
 
     log_file: File,
-    logging: bool
+    logging: bool,
+
+    pub debugger: Debugger
 }
 
 impl CPU
@@ -146,11 +149,26 @@ impl CPU
             counter: 0,
 
             log_file: File::create("custom_log_own.txt").unwrap(),
-            logging: false
+            logging: false,
+
+            debugger: Debugger::new()
         }
     }
 
-    pub fn step(&mut self, mem: &mut Memory)
+    pub fn run(&mut self, mem: &mut Memory)
+    {
+        // TODO run 1 frame
+
+        for i in 1..1000
+        {
+            if !self.step(mem)
+            {
+                return;
+            }
+        }
+    }
+
+    pub fn step(&mut self, mem: &mut Memory) -> bool
     {
         // Pending load
 
@@ -169,7 +187,7 @@ impl CPU
         if self.current_pc % 4 != 0
         {
             self.exception(Exception::LoadAddress);
-            return;
+            return false;
         }
 
         let opcode = mem.read(self.pc); // TODO directly Opcode, need to impl to str
@@ -177,7 +195,7 @@ impl CPU
         self.pc = self.next_pc;
         self.next_pc = self.pc.wrapping_add(4);
 
-        if self.counter > 2695600 + 5195443
+        if self.counter > 0 //2695600 + 5195443
         {
             // debug logging
 
@@ -288,6 +306,12 @@ impl CPU
         // Update the registers to account for the load-delay slot
 
         self.r = self.r_out;
+
+        // Check breakpoints
+
+        let stop = self.debugger.is_breakpoint(self.next_pc);
+
+        !stop
     }
 
     fn reg(&mut self, index: u32) -> u32
