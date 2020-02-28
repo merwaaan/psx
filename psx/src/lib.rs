@@ -1,4 +1,5 @@
 pub mod psx;
+pub mod opcode;
 
 mod bios;
 mod cpu;

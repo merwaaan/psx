@@ -31,6 +31,11 @@ impl PSX
 
     pub fn step(&mut self)
     {
+        self.cpu.step(&mut self.mem);
+    }
+
+    pub fn run(&mut self)
+    {
         self.cpu.run(&mut self.mem);
     }
 }

@@ -8,77 +8,10 @@
 
 use crate::debugger::Debugger;
 use crate::memory::Memory;
+use crate::opcode::Opcode;
 
 use std::fs::File;
 use std::io::Write;
-
-pub struct Opcode(u32);
-
-impl Opcode
-{
-    // Bits 31 to 26
-    fn instr(&self) -> u32
-    {
-        let Opcode(code) = self;
-        code >> 26
-    }
-
-    // Bits 25 to 21
-    fn rs(&self) -> u32
-    {
-        let Opcode(code) = self;
-        (code >> 21) & 0x1F as u32
-    }
-
-    // Bits 20 to 16
-    fn rt(&self) -> u32
-    {
-        let Opcode(code) = self;
-        (code >> 16) & 0x1F as u32
-    }
-
-    // Bits 15 to 11
-    fn rd(&self) -> u32
-    {
-        let Opcode(code) = self;
-        (code >> 11) & 0x1F as u32
-    }
-
-    // Bits 5 to 0
-    fn sub(&self) -> u32
-    {
-        let Opcode(code) = self;
-        code & 0x3F as u32
-    }
-
-    // Bits 10 to 6
-    fn imm5(&self) -> u32
-    {
-        let Opcode(code) = self;
-        (code >> 6) & 0x1F as u32
-    }
-
-    // Bits 25 to 0
-    fn imm26(&self) -> u32
-    {
-        let Opcode(code) = self;
-        code & 0x3FFFFFF as u32
-    }
-
-    // Bits 15 to 0
-    fn imm(&self) -> u32
-    {
-        let Opcode(code) = self;
-        code & 0xFFFF
-    }
-
-    // Bits 15 to 0, sign-extended
-    fn imm_se(&self) -> u32
-    {
-        let Opcode(code) = self;
-        (code & 0xFFFF) as i16 as u32
-    }
-}
 
 // TODO make sure R0 always 0
 
@@ -159,7 +92,7 @@ impl CPU
     {
         // TODO run 1 frame
 
-        for i in 1..1000
+        for _ in 1..1000
         {
             if !self.step(mem)
             {
@@ -190,7 +123,7 @@ impl CPU
             return false;
         }
 
-        let opcode = mem.read(self.pc); // TODO directly Opcode, need to impl to str
+        let opcode = Opcode(mem.read(self.pc));
 
         self.pc = self.next_pc;
         self.next_pc = self.pc.wrapping_add(4);
@@ -227,79 +160,79 @@ impl CPU
 
         self.counter += 1;
 
-        match Opcode(opcode).instr()
+        match opcode.instr()
         {
             0b000000 =>
             {
-                match Opcode(opcode).sub()
+                match opcode.sub()
                 {
-                    0b000000 => self.sll(&Opcode(opcode)),
-                    0b000010 => self.srl(&Opcode(opcode)),
-                    0b000011 => self.sra(&Opcode(opcode)),
-                    0b000100 => self.sllv(&Opcode(opcode)),
-                    0b000111 => self.srav(&Opcode(opcode)),
-                    0b001000 => self.jr(&Opcode(opcode)),
-                    0b001001 => self.jalr(&Opcode(opcode)),
+                    0b000000 => self.sll(&opcode),
+                    0b000010 => self.srl(&opcode),
+                    0b000011 => self.sra(&opcode),
+                    0b000100 => self.sllv(&opcode),
+                    0b000111 => self.srav(&opcode),
+                    0b001000 => self.jr(&opcode),
+                    0b001001 => self.jalr(&opcode),
                     0b001100 => self.syscall(),
-                    0b010000 => self.mfhi(&Opcode(opcode)),
-                    0b010001 => self.mthi(&Opcode(opcode)),
-                    0b010010 => self.mflo(&Opcode(opcode)),
-                    0b010011 => self.mtlo(&Opcode(opcode)),
-                    0b011010 => self.div(&Opcode(opcode)),
-                    0b011011 => self.divu(&Opcode(opcode)),
-                    0b100000 => self.add(&Opcode(opcode)),
-                    0b100001 => self.addu(&Opcode(opcode)),
-                    0b100011 => self.subu(&Opcode(opcode)),
-                    0b100100 => self.and(&Opcode(opcode)),
-                    0b100101 => self.or(&Opcode(opcode)),
-                    0b100111 => self.nor(&Opcode(opcode)),
-                    0b101010 => self.slt(&Opcode(opcode)),
-                    0b101011 => self.sltu(&Opcode(opcode)),
+                    0b010000 => self.mfhi(&opcode),
+                    0b010001 => self.mthi(&opcode),
+                    0b010010 => self.mflo(&opcode),
+                    0b010011 => self.mtlo(&opcode),
+                    0b011010 => self.div(&opcode),
+                    0b011011 => self.divu(&opcode),
+                    0b100000 => self.add(&opcode),
+                    0b100001 => self.addu(&opcode),
+                    0b100011 => self.subu(&opcode),
+                    0b100100 => self.and(&opcode),
+                    0b100101 => self.or(&opcode),
+                    0b100111 => self.nor(&opcode),
+                    0b101010 => self.slt(&opcode),
+                    0b101011 => self.sltu(&opcode),
                     _        => panic!("Unsupported opcode: {:08x}", opcode)
                 }
             },
             0b000001 =>
             {
-                match Opcode(opcode).rt()
+                match opcode.rt()
                 {
-                    0b00000 => self.bltz(&Opcode(opcode)),
-                    0b00001 => self.bgez(&Opcode(opcode)),
-                    0b10000 => self.bltzal(&Opcode(opcode)),
-                    0b10001 => self.bgezal(&Opcode(opcode)),
+                    0b00000 => self.bltz(&opcode),
+                    0b00001 => self.bgez(&opcode),
+                    0b10000 => self.bltzal(&opcode),
+                    0b10001 => self.bgezal(&opcode),
                     _        => panic!("Unsupported opcode: {:08x}", opcode)
                 }
             },
-            0b000010 => self.j(&Opcode(opcode)),
-            0b000011 => self.jal(&Opcode(opcode)),
-            0b000100 => self.beq(&Opcode(opcode)),
-            0b000101 => self.bne(&Opcode(opcode)),
-            0b000110 => self.blez(&Opcode(opcode)),
-            0b000111 => self.bgtz(&Opcode(opcode)),
-            0b001000 => self.addi(& Opcode(opcode)),
-            0b001001 => self.addiu(& Opcode(opcode)),
-            0b001010 => self.slti(& Opcode(opcode)),
-            0b001011 => self.sltiu(& Opcode(opcode)),
-            0b001100 => self.andi(&Opcode(opcode)),
-            0b001101 => self.ori(&Opcode(opcode)),
-            0b001111 => self.lui(&Opcode(opcode)),
+            0b000010 => self.j(&opcode),
+            0b000011 => self.jal(&opcode),
+            0b000100 => self.beq(&opcode),
+            0b000101 => self.bne(&opcode),
+            0b000110 => self.blez(&opcode),
+            0b000111 => self.bgtz(&opcode),
+            0b001000 => self.addi(&opcode),
+            0b001001 => self.addiu(&opcode),
+            0b001010 => self.slti(&opcode),
+            0b001011 => self.sltiu(&opcode),
+            0b001100 => self.andi(&opcode),
+            0b001101 => self.ori(&opcode),
+            0b001111 => self.lui(&opcode),
             0b010000 =>
             {
-                match Opcode(opcode).rs()
+                match opcode.rs()
                 {
-                    0b00000 => self.cop0_mfc(&Opcode(opcode)),
-                    0b00100 => self.cop0_mtc(&Opcode(opcode)),
+                    0b00000 => self.cop0_mfc(&opcode),
+                    0b00100 => self.cop0_mtc(&opcode),
                     0b10000 => self.cop0_rfe(),
                     _        => panic!("Unsupported opcode: {:08x}", opcode)
                 }
             },
-            0b100000 => self.lb(mem, &Opcode(opcode)),
-            0b100001 => self.lh(mem, &Opcode(opcode)),
-            0b100011 => self.lw(mem, &Opcode(opcode)),
-            0b100100 => self.lbu(mem, &Opcode(opcode)),
-            0b100101 => self.lhu(mem, &Opcode(opcode)),
-            0b101000 => self.sb(mem, &Opcode(opcode)),
-            0b101001 => self.sh(mem, &Opcode(opcode)),
-            0b101011 => self.sw(mem, &Opcode(opcode)),
+            0b100000 => self.lb(mem, &opcode),
+            0b100001 => self.lh(mem, &opcode),
+            0b100011 => self.lw(mem, &opcode),
+            0b100100 => self.lbu(mem, &opcode),
+            0b100101 => self.lhu(mem, &opcode),
+            0b101000 => self.sb(mem, &opcode),
+            0b101001 => self.sh(mem, &opcode),
+            0b101011 => self.sw(mem, &opcode),
             _        => panic!("Unsupported opcode: {:08x}", opcode)
         }
 
