@@ -20,6 +20,8 @@ fn main()
 
     let mut p = PSX::new(&Path::new(&args[1]));
 
+    p.cpu.debugger.load("debugger.json");
+
     //
 
     let mut new_breakpoint = 0;
@@ -28,6 +30,22 @@ fn main()
     system.main_loop(move |run, ui|
     {
         ui.show_demo_window(run);
+
+        /*for (key, state) in ui.io().keys_down.iter().enumerate()
+        {
+            if ui.is_key_released(key as u32)
+            {
+                println!("RELEASED {}", key);
+            }
+        }*/
+        if ui.is_key_released(10)
+        {
+            p.step();
+        }
+        else if ui.is_key_released(35)
+        {
+            p.run();
+        }
 
         Window::new(im_str!("Breakpoints"))
             .position([0.0, 0.0], Condition::FirstUseEver)
@@ -41,6 +59,7 @@ fn main()
                     if ui.small_button(im_str!("Remove"))
                     {
                         p.cpu.debugger.remove_breakpoint(b);
+                        p.cpu.debugger.save("debugger.json");
                     }
                 }
 
@@ -56,26 +75,27 @@ fn main()
                 if ui.small_button(im_str!("Add"))
                 {
                     p.cpu.debugger.add_breakpoint(new_breakpoint as u32);
+                    p.cpu.debugger.save("debugger.json");
                 }
             });
 
         Window::new(im_str!("Registers"))
             .position([0.0, 200.0], Condition::FirstUseEver)
-            .size([300.0, 100.0], Condition::FirstUseEver)
             .build(ui, ||
             {
                 ui.text(format!("PC {:08X}", p.cpu.pc));
                 ui.separator();
 
+                ui.columns(4, im_str!(""), false);
+
                 for i in 0..32
                 {
-                    ui.columns(2, im_str!(""), false);
-                    ui.text(format!("R{} {:08X}", i, p.cpu.r[i]));
-
-                    if i == 15
+                    if i > 0 && i % 8 == 0
                     {
                         ui.next_column();
                     }
+
+                    ui.text(format!("R{} {:08X}", i, p.cpu.r[i]));
                 }
 
                 ui.columns(1, im_str!(""), false);
@@ -95,13 +115,10 @@ fn main()
                 for i in 0..10
                 {
                     let pc = p.cpu.pc + i * 4;
-                    let opcode = p.mem.read(pc);
-                    let disasm = p.cpu.debugger.disassemble(opcode, &p.cpu, &p.mem);
+                    let disasm = p.cpu.debugger.disassemble(pc, &p.cpu, &p.mem);
 
-                    ui.text(format!("{:08X} {:08X} {}", pc, opcode, disasm));
+                    ui.text(format!("{:08X}    {:08X}    {}", pc, disasm.bits, disasm.mnemonics));
                 }
             });
-
-        //p.step();
     });
 }

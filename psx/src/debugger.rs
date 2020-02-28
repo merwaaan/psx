@@ -2,12 +2,17 @@ use crate::cpu::CPU;
 use crate::memory::Memory;
 use crate::opcode::Opcode;
 
+use serde::{ Serialize, Deserialize };
+use std::fs::File;
+use std::io::{ Read, Write };
+
 pub struct Disassembly
 {
     pub bits: u32,
     pub mnemonics: String
 }
 
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Debugger
 {
     breakpoints: Vec<u32>
@@ -21,6 +26,32 @@ impl Debugger
         {
             breakpoints: Vec::new()
         }
+    }
+
+    pub fn save(&self, file_path: &str) -> std::io::Result<()>
+    {
+        let serialized = serde_json::to_string(&self)?;
+        println!("Serialized: {}", serialized);
+
+        let mut file = File::create(file_path)?;
+        file.write_all(serialized.as_bytes());
+
+        Ok(())
+    }
+
+    pub fn load(&mut self, file_path: &str) -> std::io::Result<()>
+    {
+        let mut file = File::open(file_path)?;
+
+        let mut serialized = String::new();
+        file.read_to_string(&mut serialized)?;
+
+        let deserialized: Debugger = serde_json::from_str(&serialized).unwrap();
+        println!("Deserialized: {:?}", deserialized);
+
+        self.breakpoints = deserialized.breakpoints;
+
+        Ok(())
     }
 
     pub fn add_breakpoint(&mut self, address: u32)

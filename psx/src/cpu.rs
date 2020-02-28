@@ -90,9 +90,7 @@ impl CPU
 
     pub fn run(&mut self, mem: &mut Memory)
     {
-        // TODO run 1 frame
-
-        for _ in 1..1000
+        loop
         {
             if !self.step(mem)
             {
@@ -199,7 +197,7 @@ impl CPU
                     0b00001 => self.bgez(&opcode),
                     0b10000 => self.bltzal(&opcode),
                     0b10001 => self.bgezal(&opcode),
-                    _        => panic!("Unsupported opcode: {:08x}", opcode)
+                    _       => panic!("Unsupported opcode: {:08x}", opcode)
                 }
             },
             0b000010 => self.j(&opcode),
@@ -222,7 +220,7 @@ impl CPU
                     0b00000 => self.cop0_mfc(&opcode),
                     0b00100 => self.cop0_mtc(&opcode),
                     0b10000 => self.cop0_rfe(),
-                    _        => panic!("Unsupported opcode: {:08x}", opcode)
+                    _       => panic!("Unsupported opcode: {:08x}", opcode)
                 }
             },
             0b100000 => self.lb(mem, &opcode),
