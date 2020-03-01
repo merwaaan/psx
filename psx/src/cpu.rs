@@ -1,11 +1,3 @@
-// Notes
-//
-// Execution diffs after ADDIU is called a few times @ bfc01a60 (3rd time?)
-//
-// BIOS @BFC06F0C = ori in nopsx but lui here?!
-//
-// CONTINUE: seems OK until 83815
-
 use crate::debugger::Debugger;
 use crate::memory::Memory;
 use crate::opcode::Opcode;
@@ -15,6 +7,7 @@ use std::io::Write;
 
 // TODO make sure R0 always 0
 
+#[derive(Debug)]
 enum Exception
 {
     LoadAddress = 0x4,
@@ -126,37 +119,40 @@ impl CPU
         self.pc = self.next_pc;
         self.next_pc = self.pc.wrapping_add(4);
 
-        if self.counter > 0 //2695600 + 5195443
+        // CONTINUE: exception not taken @ 19258534 (log exception to file?)
+        if self.counter >= 19250000 && self.counter < 19260000 && self.counter % 1 == 0
         {
             // debug logging
 
-            write!(&mut self.log_file, "{:08x} {:08x} \n", self.current_pc, opcode).unwrap();
+            //write!(&mut self.log_file, "{} {:08x} {:08x} \n", self.counter, self.current_pc, opcode).unwrap();
 
-    /*
-            write!(&mut self.log_file, "{:08x} {:08x} ", self.current_pc, opcode).unwrap();
+            let mut s = String::new();
+
+            s += &format!("{} {:08x} {:08x} ", self.counter, self.current_pc, opcode);
             for i in 0 .. 32
             {
-                write!(&mut self.log_file, "R{} {:08x} ", i, self.r[i]).unwrap();
+               s += &format!("R{}={:08x} ", i, self.r[i]);
             }
-            write!(&mut self.log_file, "HI {:08x} ", self.hi).unwrap();
-            write!(&mut self.log_file, "LO {:08x} ", self.lo).unwrap();
-            write!(&mut self.log_file, "\n").unwrap();
+            s += &format!("HI {:08x} ", self.hi);
+            s += &format!("LO {:08x} ", self.lo);
+            s += &format!("\n");
+
+            write!(&mut self.log_file, "{}", s).unwrap();
 
             for i in 0 .. 32
             {
                 debug!("\tR{} = {:08x}", i, self.r[i]);
             }
-    */
+
 
             self.logging = true;
         }
+        self.counter += 1;
 
         if self.logging
         {
             debug!("\nopcode {:08x} @ {:08x} | {:b} | {}", opcode, self.current_pc, self.status, self.counter);
         }
-
-        self.counter += 1;
 
         match opcode.instr()
         {
@@ -168,6 +164,7 @@ impl CPU
                     0b000010 => self.srl(&opcode),
                     0b000011 => self.sra(&opcode),
                     0b000100 => self.sllv(&opcode),
+                    0b000110 => self.srlv(&opcode),
                     0b000111 => self.srav(&opcode),
                     0b001000 => self.jr(&opcode),
                     0b001001 => self.jalr(&opcode),
@@ -176,6 +173,7 @@ impl CPU
                     0b010001 => self.mthi(&opcode),
                     0b010010 => self.mflo(&opcode),
                     0b010011 => self.mtlo(&opcode),
+                    0b011001 => self.multu(&opcode),
                     0b011010 => self.div(&opcode),
                     0b011011 => self.divu(&opcode),
                     0b100000 => self.add(&opcode),
@@ -293,6 +291,19 @@ impl CPU
             Some(result) => self.set_reg(opcode.rd(), result as u32),
             None         => self.exception(Exception::Overflow)
         };
+    }
+
+    fn multu(&mut self, opcode: &Opcode)
+    {
+        trace!("MULTU _ R{}={:08x} + R{}={:08x} -> HI/LO", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()));
+
+        let rs = self.reg(opcode.rs()) as u64;
+        let rt = self.reg(opcode.rt()) as u64;
+
+        let mul = rs * rt;
+
+        self.hi = (mul >> 32) as u32;
+        self.lo = mul as u32;
     }
 
     fn div(&mut self, opcode: &Opcode)
@@ -697,9 +708,18 @@ impl CPU
         trace!("SLLV _ R{} << {} -> R{}", opcode.rt(), self.reg(opcode.rs()) & 0b11111, opcode.rd());
 
         let shift = self.reg(opcode.rs()) & 0b11111;
-        let result = (self.reg(opcode.rt()) as i32) >> shift;
-        self.set_reg(opcode.rd(), result as u32);
+        let result = self.reg(opcode.rt()) << shift;
+        self.set_reg(opcode.rd(), result);
 
+    }
+
+    fn srlv(&mut self, opcode: &Opcode)
+    {
+        trace!("SRLV _ R{} >> {} -> R{}", opcode.rt(), self.reg(opcode.rs()) & 0b11111, opcode.rd());
+
+        let shift = self.reg(opcode.rs()) & 0b11111;
+        let result = self.reg(opcode.rt()) >> shift;
+        self.set_reg(opcode.rd(), result);
     }
 
     fn srav(&mut self, opcode: &Opcode)
@@ -707,8 +727,8 @@ impl CPU
         trace!("SRAV _ R{} >> {} -> R{}", opcode.rt(), self.reg(opcode.rs()) & 0b11111, opcode.rd());
 
         let shift = self.reg(opcode.rs()) & 0b11111;
-        let result = self.reg(opcode.rt()) << shift;
-        self.set_reg(opcode.rd(), result);
+        let result = (self.reg(opcode.rt()) as i32) >> shift;
+        self.set_reg(opcode.rd(), result as u32);
 
     }
 
@@ -794,7 +814,7 @@ impl CPU
 
         if self.status & 0x10000 != 0
         {
-            debug!("Cache is isolated, ignoring");
+            error!("Cache is isolated, ignoring");
             return;
         }
 
@@ -850,20 +870,22 @@ impl CPU
 
     fn mtlo(&mut self, opcode: &Opcode)
     {
-        trace!("MTLO _ R{} -> LO={:08x}", opcode.rd(), self.lo);
+        trace!("MTLO _ R{} -> LO={:08x}", opcode.rs(), self.lo);
 
-        self.lo = self.reg(opcode.rd());
+        self.lo = self.reg(opcode.rs());
     }
 
     fn mthi(&mut self, opcode: &Opcode)
     {
-        trace!("MTHI _ R{} -> HI={:08x}", opcode.rd(), self.hi);
+        trace!("MTHI _ R{} -> HI={:08x}", opcode.rs(), self.hi);
 
-        self.hi = self.reg(opcode.rd());
+        self.hi = self.reg(opcode.rs());
     }
 
     fn exception(&mut self, cause: Exception)
     {
+        panic!("exception {:?}", cause);
+
         self.epc = self.current_pc;
         self.cause = (cause as u32) << 2;
 

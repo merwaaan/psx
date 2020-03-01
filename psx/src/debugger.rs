@@ -31,10 +31,9 @@ impl Debugger
     pub fn save(&self, file_path: &str) -> std::io::Result<()>
     {
         let serialized = serde_json::to_string(&self)?;
-        println!("Serialized: {}", serialized);
 
         let mut file = File::create(file_path)?;
-        file.write_all(serialized.as_bytes());
+        file.write_all(serialized.as_bytes())?;
 
         Ok(())
     }
@@ -46,8 +45,7 @@ impl Debugger
         let mut serialized = String::new();
         file.read_to_string(&mut serialized)?;
 
-        let deserialized: Debugger = serde_json::from_str(&serialized).unwrap();
-        println!("Deserialized: {:?}", deserialized);
+        let deserialized: Debugger = serde_json::from_str(&serialized)?;
 
         self.breakpoints = deserialized.breakpoints;
 
@@ -141,8 +139,8 @@ impl Debugger
             {
                 match opcode.rs()
                 {
-                    0b00000 => "MFC $rt, $rd",
-                    0b00100 => "MTC $rt, $rd",
+                    0b00000 => "MFC $rt, cop$rd",
+                    0b00100 => "MTC $rt, cop$rd",
                     0b10000 => "RFE",
                     _       => "UNKNOWN"
                 }
