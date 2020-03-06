@@ -125,7 +125,7 @@ fn main()
             .size([0.0, 0.0], Condition::FirstUseEver)
             .build(ui, ||
             {
-                for i in -10..10
+                for i in 0..10
                 {
                     let pc = p.cpu.pc.wrapping_add(i as u32 * 4);
                     let disasm = p.cpu.debugger.disassemble(pc, &p.cpu, &p.mem);

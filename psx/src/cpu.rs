@@ -13,6 +13,9 @@ enum Exception
     LoadAddress = 0x4,
     StoreAddress = 0x5,
     Syscall = 0x8,
+    Break = 0x9,
+    IllegalInstruction = 0xA,
+    CoprocessorError = 0xB,
     Overflow = 0xC
 }
 
@@ -169,22 +172,26 @@ impl CPU
                     0b001000 => self.jr(&opcode),
                     0b001001 => self.jalr(&opcode),
                     0b001100 => self.syscall(),
+                    0b001101 => self.break_(),
                     0b010000 => self.mfhi(&opcode),
                     0b010001 => self.mthi(&opcode),
                     0b010010 => self.mflo(&opcode),
                     0b010011 => self.mtlo(&opcode),
+                    0b011000 => self.mult(&opcode),
                     0b011001 => self.multu(&opcode),
                     0b011010 => self.div(&opcode),
                     0b011011 => self.divu(&opcode),
                     0b100000 => self.add(&opcode),
                     0b100001 => self.addu(&opcode),
+                    0b100010 => self.sub(&opcode),
                     0b100011 => self.subu(&opcode),
                     0b100100 => self.and(&opcode),
                     0b100101 => self.or(&opcode),
+                    0b100110 => self.xor(&opcode),
                     0b100111 => self.nor(&opcode),
                     0b101010 => self.slt(&opcode),
                     0b101011 => self.sltu(&opcode),
-                    _        => panic!("Unsupported opcode: {:08x}", opcode)
+                    _        => self.illegal(&opcode),
                 }
             },
             0b000001 =>
@@ -195,7 +202,7 @@ impl CPU
                     0b00001 => self.bgez(&opcode),
                     0b10000 => self.bltzal(&opcode),
                     0b10001 => self.bgezal(&opcode),
-                    _       => panic!("Unsupported opcode: {:08x}", opcode)
+                    _       => self.illegal(&opcode)
                 }
             },
             0b000010 => self.j(&opcode),
@@ -210,6 +217,7 @@ impl CPU
             0b001011 => self.sltiu(&opcode),
             0b001100 => self.andi(&opcode),
             0b001101 => self.ori(&opcode),
+            0b001110 => self.xori(&opcode),
             0b001111 => self.lui(&opcode),
             0b010000 =>
             {
@@ -218,18 +226,33 @@ impl CPU
                     0b00000 => self.cop0_mfc(&opcode),
                     0b00100 => self.cop0_mtc(&opcode),
                     0b10000 => self.cop0_rfe(),
-                    _       => panic!("Unsupported opcode: {:08x}", opcode)
+                    _       => self.illegal(&opcode)
                 }
             },
+            0b010001 => self.cop1(),
+            0b010010 => self.cop2(),
+            0b010011 => self.cop3(),
             0b100000 => self.lb(mem, &opcode),
             0b100001 => self.lh(mem, &opcode),
+            0b100010 => self.lwl(mem, &opcode),
             0b100011 => self.lw(mem, &opcode),
             0b100100 => self.lbu(mem, &opcode),
             0b100101 => self.lhu(mem, &opcode),
+            0b100110 => self.lwr(mem, &opcode),
             0b101000 => self.sb(mem, &opcode),
             0b101001 => self.sh(mem, &opcode),
+            0b101010 => self.swl(mem, &opcode),
             0b101011 => self.sw(mem, &opcode),
-            _        => panic!("Unsupported opcode: {:08x}", opcode)
+            0b101110 => self.swr(mem, &opcode),
+            0b110000 => self.cop0_lwc(),
+            0b110001 => self.cop1_lwc(),
+            0b110010 => self.cop2_lwc(),
+            0b110011 => self.cop3_lwc(),
+            0b111000 => self.cop0_swc(),
+            0b111001 => self.cop1_swc(),
+            0b111010 => self.cop2_swc(),
+            0b111011 => self.cop3_swc(),
+            _        => self.illegal(&opcode)
         }
 
         // Update the registers to account for the load-delay slot
@@ -252,6 +275,12 @@ impl CPU
     {
         self.r_out[index as usize] = value;
         self.r_out[0] = 0; // R0 is always zero
+    }
+
+    fn illegal(&mut self, opcode: &Opcode)
+    {
+        error!("Illegal instruction: {:08x}", opcode);
+        self.exception(Exception::IllegalInstruction);
     }
 
     // ADDIU truncates on overflow
@@ -291,6 +320,19 @@ impl CPU
             Some(result) => self.set_reg(opcode.rd(), result as u32),
             None         => self.exception(Exception::Overflow)
         };
+    }
+
+    fn mult(&mut self, opcode: &Opcode)
+    {
+        trace!("MULT _ R{}={:08x} + R{}={:08x} -> HI/LO", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()));
+
+        let rs = self.reg(opcode.rs()) as i64; // TODO as i32 as i64???
+        let rt = self.reg(opcode.rt()) as i64;
+
+        let mul = (rs * rt) as u64;
+
+        self.hi = (mul >> 32) as u32;
+        self.lo = mul as u32;
     }
 
     fn multu(&mut self, opcode: &Opcode)
@@ -357,9 +399,23 @@ impl CPU
         self.set_reg(opcode.rd(), result);
     }
 
+    fn sub(&mut self, opcode: &Opcode)
+    {
+        trace!("SUB _ R{}={:08x} - R{}={:08x} -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()), opcode.rd());
+
+        let rs = self.reg(opcode.rs()) as i32;
+        let rt = self.reg(opcode.rt()) as i32;
+
+        match rs.checked_sub(rt)
+        {
+            Some(result) => self.set_reg(opcode.rd(), result as u32),
+            None         => self.exception(Exception::Overflow)
+        }
+    }
+
     fn subu(&mut self, opcode: &Opcode)
     {
-        trace!("SUBU _ R{}={:08x} + R{}={:08x} -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()), opcode.rd());
+        trace!("SUBU _ R{}={:08x} - R{}={:08x} -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()), opcode.rd());
 
         let result = self.reg(opcode.rs()).wrapping_sub(self.reg(opcode.rt()));
         self.set_reg(opcode.rd(), result);
@@ -526,6 +582,27 @@ impl CPU
         self.status = (self.status & !0x3F) | ((self.status & 0x3F) >> 2);
     }
 
+    fn cop1(&mut self)
+    {
+        trace!("COP1");
+
+        self.exception(Exception::CoprocessorError);
+    }
+
+    fn cop2(&mut self)
+    {
+        trace!("COP1");
+
+        panic!("GTE not implemented");
+    }
+
+    fn cop3(&mut self)
+    {
+        trace!("COP3");
+
+        self.exception(Exception::CoprocessorError);
+    }
+
     fn j(&mut self, opcode: &Opcode)
     {
         trace!("J _ {:08x}", opcode.imm26());
@@ -670,9 +747,63 @@ impl CPU
         }
     }
 
+    fn lwl(&mut self, mem: &mut Memory, opcode: &Opcode)
+    {
+        trace!("LWL _ {:08x}(R{})={:08x} -> R{}", opcode.imm_se(), opcode.rs(), self.reg(opcode.rs()).wrapping_add(opcode.imm_se()), opcode.rt());
+
+        let address = self.reg(opcode.rs()).wrapping_add(opcode.imm_se());
+
+        // Load-delay slot
+        let value = self.r_out[opcode.rt() as usize];
+
+        let aligned_value = mem.read(address & !3);
+
+        let result = match address & 3
+        {
+            0 => (value & 0x00FFFFFF) | (aligned_value << 24),
+            1 => (value & 0x0000FFFF) | (aligned_value << 16),
+            2 => (value & 0x000000FF) | (aligned_value << 8),
+            3 => aligned_value,
+            _ => unreachable!()
+        };
+
+        self.pending_load = (opcode.rt(), result);
+    }
+
+    fn lwr(&mut self, mem: &mut Memory, opcode: &Opcode)
+    {
+        trace!("LWR _ {:08x}(R{})={:08x} -> R{}", opcode.imm_se(), opcode.rs(), self.reg(opcode.rs()).wrapping_add(opcode.imm_se()), opcode.rt());
+
+        let address = self.reg(opcode.rs()).wrapping_add(opcode.imm_se());
+
+        // Load-delay slot
+        let value = self.r_out[opcode.rt() as usize];
+
+        let aligned_value = mem.read(address & !3);
+
+        let result = match address & 3
+        {
+            0 => aligned_value,
+            1 => (value & 0xFF000000) | (aligned_value >> 8),
+            2 => (value & 0xFFFF0000) | (aligned_value >> 16),
+            3 => (value & 0xFFFFFF00) | (aligned_value >> 24),
+            _ => unreachable!()
+        };
+
+        self.pending_load = (opcode.rt(), result);
+    }
+
     fn or(&mut self, opcode: &Opcode)
     {
-        trace!("OR _ R{}={:08x} | R{}={:08x} = {:08x} -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()), self.reg(opcode.rt()) | self.reg(opcode.rs()), opcode.rd());
+        trace!("OR _ R{}={:08x} ^ R{}={:08x} = {:08x} -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()), self.reg(opcode.rt()) ^ self.reg(opcode.rs()), opcode.rd());
+
+        let result = self.reg(opcode.rt()) ^ self.reg(opcode.rs());
+        self.set_reg(opcode.rd(), result);
+    }
+
+    fn xor(&mut self, opcode: &Opcode)
+    {
+        trace!("XOR _ R{}={:08x} | R{}={:08x} = {:08x} -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()), self.reg(opcode.rt()) | self.reg(opcode.rs()), opcode.rd());
 
         let result = self.reg(opcode.rt()) | self.reg(opcode.rs());
         self.set_reg(opcode.rd(), result);
@@ -691,6 +822,14 @@ impl CPU
         trace!("ORI");
 
         let result = self.reg(opcode.rs()) | opcode.imm();
+        self.set_reg(opcode.rt(), result);
+    }
+
+    fn xori(&mut self, opcode: &Opcode)
+    {
+        trace!("XORI");
+
+        let result = self.reg(opcode.rs()) ^ opcode.imm();
         self.set_reg(opcode.rt(), result);
     }
 
@@ -854,6 +993,46 @@ impl CPU
         }
     }
 
+    fn swl(&mut self, mem: &mut Memory, opcode: &Opcode)
+    {
+        let address = self.reg(opcode.rs()).wrapping_add(opcode.imm_se());
+        let value = self.reg(opcode.rt());
+
+        let aligned_address = address & !3;
+        let aligned_value = mem.read(aligned_address);
+
+        let result = match address & 3
+        {
+            0 => (aligned_value & 0xFFFFFF00) | (value << 24),
+            1 => (aligned_value & 0xFFFF0000) | (value << 16),
+            2 => (aligned_value & 0xFF000000) | (value << 8),
+            3 => aligned_value,
+            _ => unreachable!()
+        };
+
+        mem.write(address, result);
+    }
+
+    fn swr(&mut self, mem: &mut Memory, opcode: &Opcode)
+    {
+        let address = self.reg(opcode.rs()).wrapping_add(opcode.imm_se());
+        let value = self.reg(opcode.rt());
+
+        let aligned_address = address & !3;
+        let aligned_value = mem.read(aligned_address);
+
+        let result = match address & 3
+        {
+            0 => aligned_value,
+            1 => (aligned_value & 0x000000FF) | (value << 8),
+            2 => (aligned_value & 0x0000FFFF) | (value << 16),
+            3 => (aligned_value & 0x00FFFFFF) | (value << 24),
+            _ => unreachable!()
+        };
+
+        mem.write(address, result);
+    }
+
     fn mflo(&mut self, opcode: &Opcode)
     {
         trace!("MFLO _ LO={:08x} -> R{}", self.lo, opcode.rd());
@@ -884,8 +1063,6 @@ impl CPU
 
     fn exception(&mut self, cause: Exception)
     {
-        panic!("exception {:?}", cause);
-
         self.epc = self.current_pc;
         self.cause = (cause as u32) << 2;
 
@@ -913,5 +1090,52 @@ impl CPU
         trace!("SYSCALL");
 
         self.exception(Exception::Syscall);
+    }
+
+    fn break_(&mut self)
+    {
+        trace!("BREAK");
+
+        self.exception(Exception::Break);
+    }
+
+    fn cop0_lwc(&mut self)
+    {
+        self.exception(Exception::CoprocessorError);
+    }
+
+    fn cop1_lwc(&mut self)
+    {
+        self.exception(Exception::CoprocessorError);
+    }
+
+    fn cop2_lwc(&mut self)
+    {
+        panic!("unsupported cop2_lwc");
+    }
+
+    fn cop3_lwc(&mut self)
+    {
+        self.exception(Exception::CoprocessorError);
+    }
+
+    fn cop0_swc(&mut self)
+    {
+        self.exception(Exception::CoprocessorError);
+    }
+
+    fn cop1_swc(&mut self)
+    {
+        self.exception(Exception::CoprocessorError);
+    }
+
+    fn cop2_swc(&mut self)
+    {
+        panic!("unsupported cop2_swc");
+    }
+
+    fn cop3_swc(&mut self)
+    {
+        self.exception(Exception::CoprocessorError);
     }
 }

@@ -35,7 +35,7 @@ impl Memory
 
         match addr
         {
-            0x00000000 ..= 0x1F000000 =>  self.read_ram8(addr), // TODO exclusive range
+            0x00000000 ..= 0x1EFFFFFF =>  self.read_ram8(addr),
             0x1F000000 ..= 0x1F800000 => 0xFF, // fake license check
             0x1F801C00 ..= 0x1F801E80 => self.spu.read8(addr - 0x1F801C00),
 
@@ -60,8 +60,8 @@ impl Memory
         match addr
         {
             //0x1F801070 ..= 0x1F801078 => { info!("IRQ read16 @ {:08x}", addr); 0 },
-            0x1F801070 => self.interrupt_status as u16,
-            0x1F801074 => self.interrupt_mask as u16,
+            0x1F801070 => { error!("Interrupt status read16"); self.interrupt_status as u16 },
+            0x1F801074 => { error!("Interrupt mask read16"); self.interrupt_mask as u16 },
 
             //0x1F801C00 ..= 0x1F802240 => { info!("Unhandled read from the SPU register @ {:08x}", addr); 0 },
             0x1F801C00 ..= 0x1F801E80 => self.spu.read16(addr - 0x1F801C00),
@@ -89,8 +89,8 @@ impl Memory
 
             0x1F801080 ..= 0x1F801100 => { info!("DMA read32"); 0 }
 
-            0x1F801810 ..= 0x1F801810 => { info!("unsupported GPUREAD"); 0 }
-            0x1F801814 ..= 0x1F801814 => { info!("unsupported GPUSTAT"); 0 }
+            0x1F801810 ..= 0x1F801810 => { error!("unsupported GPUREAD read32"); 0 }
+            0x1F801814 ..= 0x1F801814 => { error!("unsupported GPUSTAT read32"); 0x10000000 } // Ready for now (bit 28)
 
             0x1F801C00 ..= 0x1F801E80 => self.spu.read32(addr - 0x1F801C00),
 
@@ -134,8 +134,8 @@ impl Memory
 
         match addr
         {
-            0x1F801070 => self.interrupt_status = val as u32,
-            0x1F801074 => self.interrupt_mask = val as u32,
+            0x1F801070 => { error!("Interrupt status write16"); self.interrupt_status = val as u32 },
+            0x1F801074 => { error!("Interrupt mask write16"); self.interrupt_mask = val as u32 },
 
             0x1F801100 ..= 0x1F801130 => info!("Ignored write16 to the timer registers: {:08x} @ {:08x}", val, addr),
             //0x1F801C00 ..= 0x1F802240 => info!("Ignored write16 to the SPU register: {:08x} @ {:08x}", val, addr),
@@ -168,8 +168,8 @@ impl Memory
 
             0x1F801080 ..= 0x1F8010FF => info!("Ignoring DMA registers write"),
 
-            0x1f801810 ..= 0x1F801810 => info!("unsupported GP0 write"),
-            0x1f801814 ..= 0x1F801814 => info!("unsupported GP1 write"),
+            0x1f801810 ..= 0x1F801810 => info!("unsupported GP0 write32"),
+            0x1f801814 ..= 0x1F801814 => info!("unsupported GP1 write32"),
 
             0x1F801100 ..= 0x1F80112F => info!("Ignored write32 to the timer registers: {:08x} @ {:08x}", val, addr),
             //0x1F801D80 ..= 0x1F801DBC => error!("SPU control registers write32 {:08X} @ {:08X}", val, addr),
