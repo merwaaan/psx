@@ -1,4 +1,5 @@
 use crate::bios::BIOS;
+use crate::dma::DMA;
 use crate::spu::SPU;
 
 use std::path::Path;
@@ -6,8 +7,9 @@ use std::path::Path;
 pub struct Memory
 {
     bios: BIOS,
-    spu: SPU,
+    pub spu: SPU,
     ram: Vec<u8>,
+    dma: DMA,
 
     interrupt_status: u32,
     interrupt_mask: u32
@@ -22,6 +24,7 @@ impl Memory
             bios: BIOS::new(bios_path),
             spu: SPU::new(),
             ram: vec![0; 0x1F000000],
+            dma: DMA::new(),
 
             interrupt_status: 0,
             interrupt_mask: 0
@@ -87,7 +90,7 @@ impl Memory
             0x00000000 ..= 0x1F000000 =>  self.read_ram(addr), // TODO exclusive range
             0x1F801000 ..= 0x1F801078 => 0,
 
-            0x1F801080 ..= 0x1F801100 => { info!("DMA read32"); 0 }
+            0x1F801080 ..= 0x1F8010FF => self.dma.read(addr - 0x1F801080),
 
             0x1F801810 ..= 0x1F801810 => { error!("unsupported GPUREAD read32"); 0 }
             0x1F801814 ..= 0x1F801814 => { error!("unsupported GPUSTAT read32"); 0x10000000 } // Ready for now (bit 28)

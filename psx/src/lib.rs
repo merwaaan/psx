@@ -3,6 +3,7 @@ pub mod opcode;
 
 mod bios;
 mod cpu;
+mod dma;
 mod debugger;
 mod memory;
 mod spu;

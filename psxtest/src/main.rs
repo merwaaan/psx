@@ -57,6 +57,8 @@ fn main()
             .size([300.0, 0.0], Condition::FirstUseEver)
             .build(ui, ||
             {
+                ui.text(format!("Counter: {}", p.cpu.counter));
+
                 for b in p.cpu.debugger.get_breakpoints().to_vec()
                 {
                     ui.text(format!("0x{:08X}", b));
@@ -186,7 +188,35 @@ fn main()
                 ui.same_line(0.0);
             });
 
-        if is_paused
+
+        Window::new(im_str!("SPU"))
+            .position([400.0, 300.0], Condition::FirstUseEver)
+            .size([200.0, 0.0], Condition::FirstUseEver)
+            .build(ui, ||
+            {
+                // SPU status
+
+                ui.text(im_str!("Status"));
+                ui.text(format!("{:016X}", p.mem.spu.status.0));
+
+                // Voices
+
+                ui.text(im_str!("Voices"));
+
+                ui.columns(2, im_str!(""), false);
+
+                for i in 0 .. 24
+                {
+                    ui.text(format!("{}", i));
+                    ui.next_column();
+
+                    let voice_on = if p.mem.spu.channel_status & (1 << i) != 0 {im_str!("ON")} else {im_str!("OFF")};
+                    ui.text(voice_on);
+                    ui.next_column();
+                }
+            });
+
+        /*if is_paused
         {
             Window::new(im_str!("Pause"))
                 .position([500.0, 500.0], Condition::FirstUseEver)
@@ -195,6 +225,6 @@ fn main()
                 {
                     ui.text(im_str!("paused"));
                 });
-        }
+        }*/
     });
 }

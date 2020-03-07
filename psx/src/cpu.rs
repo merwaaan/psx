@@ -7,7 +7,7 @@ use std::io::Write;
 
 // TODO make sure R0 always 0
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum Exception
 {
     LoadAddress = 0x4,
@@ -43,7 +43,7 @@ pub struct CPU
     branching: bool,
     in_delay_slot: bool,
 
-    counter: u32,
+    pub counter: u32, // debug helper
 
     log_file: File,
     logging: bool,
@@ -123,7 +123,10 @@ impl CPU
         self.next_pc = self.pc.wrapping_add(4);
 
         // CONTINUE: exception not taken @ 19258534 (log exception to file?)
-        if self.counter >= 19250000 && self.counter < 19260000 && self.counter % 1 == 0
+        //3394000 r13 diff due to SPU capture buffer half flag
+
+        if self.counter >= 19250000 && self.counter < 19260000
+        //if self.counter % 10000 == 0
         {
             // debug logging
 
@@ -266,7 +269,7 @@ impl CPU
         !stop
     }
 
-    fn reg(&mut self, index: u32) -> u32
+    fn reg(&self, index: u32) -> u32
     {
         self.r[index as usize]
     }
@@ -554,7 +557,11 @@ impl CPU
         let value = match opcode.rd()
         {
             12 => self.status,
-            13 => self.cause,
+            13 =>
+            {
+                write!(&mut self.log_file, "CAUSE READ {} {:08x}\n", self.counter, self.cause).unwrap();
+                self.cause
+            },
             14 => self.epc,
             _  => panic!("Unsupported cop0 register: {:08x}", opcode.rd())
         };
@@ -569,8 +576,20 @@ impl CPU
 
         match opcode.rd()
         {
-            3 | 5 | 6 | 7| 9 | 11 | 13 => trace!("Ignored write to CR{}", opcode.rd()),
+            3 | 5 | 6 | 7| 9 | 11 => trace!("Ignored write to CR{}", opcode.rd()),
+
             12 => self.status = self.reg(opcode.rt()),
+
+            13 =>
+            {
+                let v = self.reg(opcode.rt());
+                write!(&mut self.log_file, "CAUSE WRITE {} {:08x}\n", self.counter, v).unwrap();
+
+                // Only SW (9-8) are writeable
+                error!("CAUSE {:08x}", opcode.rd());
+                self.cause = (self.cause & !0x300) | (self.reg(opcode.rt()) & 0x300);
+            },
+
             _  => panic!("Unsupported cop0 register: {:08x}", opcode.rd())
         };
     }
@@ -795,17 +814,17 @@ impl CPU
 
     fn or(&mut self, opcode: &Opcode)
     {
-        trace!("OR _ R{}={:08x} ^ R{}={:08x} = {:08x} -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()), self.reg(opcode.rt()) ^ self.reg(opcode.rs()), opcode.rd());
+        trace!("OR _ R{}={:08x} | R{}={:08x} = {:08x} -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()), self.reg(opcode.rt()) ^ self.reg(opcode.rs()), opcode.rd());
 
-        let result = self.reg(opcode.rt()) ^ self.reg(opcode.rs());
+        let result = self.reg(opcode.rt()) | self.reg(opcode.rs());
         self.set_reg(opcode.rd(), result);
     }
 
     fn xor(&mut self, opcode: &Opcode)
     {
-        trace!("XOR _ R{}={:08x} | R{}={:08x} = {:08x} -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()), self.reg(opcode.rt()) | self.reg(opcode.rs()), opcode.rd());
+        trace!("XOR _ R{}={:08x} ^ R{}={:08x} = {:08x} -> R{}", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()), self.reg(opcode.rt()) | self.reg(opcode.rs()), opcode.rd());
 
-        let result = self.reg(opcode.rt()) | self.reg(opcode.rs());
+        let result = self.reg(opcode.rt()) ^ self.reg(opcode.rs());
         self.set_reg(opcode.rd(), result);
     }
 
@@ -1063,6 +1082,8 @@ impl CPU
 
     fn exception(&mut self, cause: Exception)
     {
+        write!(&mut self.log_file, "EXCEPTION {}\n", cause.clone() as i32).unwrap();
+
         self.epc = self.current_pc;
         self.cause = (cause as u32) << 2;
 

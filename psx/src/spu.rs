@@ -2,8 +2,9 @@ use bitfield::bitfield;
 
 const SPU_OFFSET: u32 = 0x1F801C00;
 
-bitfield!{
-    struct CTRL(u16);
+bitfield!
+{
+    struct Control(u16);
 
     enabled, _: 15;
     muted, _: 14;
@@ -17,16 +18,17 @@ bitfield!{
     cd_audio, _: 0;
 }
 
-bitfield!{
-    struct STAT(u16);
-
+bitfield!
+{
+    pub struct Status(u16);
+    impl Debug;
     capture_buffer_half, _: 11;
     transfer_busy, _: 10;
     transfer_dma_r_req, _: 9;
     transfer_dma_w_req, _: 8;
     transfer_dma_rw_req, _: 7;
     irq9, _: 6;
-    spu_mode, _: 5, 0;
+    mode, set_mode: 5, 0; // Same as the low bits of the control register
 }
 
 pub struct SPU
@@ -43,19 +45,19 @@ pub struct SPU
     volume_reverb_left: u16,
     volume_reverb_right: u16,
 
-    voice_on: u32,
-    voice_off: u32, //
-    channel_pitch: u32,
+    voice_on: u32, // writing affects voice_status
+    voice_off: u32, // writing affects voice_status
+    channel_pitch: u32, // TODO use Voice struct
     channel_noise: u32,
     channel_reverb: u32,
-    channel_on: u32,
+    pub channel_status: u32, // set when writing to voice ON/OFF
 
     address_irq: u16,
     address_transfer: u16,
 
-    ctrl: CTRL,
-    ctrl_transfer: u16,
-    stat: STAT,
+    control: Control,
+    control_transfer: u16,
+    pub status: Status,
 
     volume_cd_left: u16,
     volume_cd_right: u16,
@@ -85,12 +87,12 @@ impl SPU
             channel_pitch: 0,
             channel_noise: 0,
             channel_reverb: 0,
-            channel_on: 0,
+            channel_status: 0,
             address_irq: 0,
             address_transfer: 0,
-            ctrl: CTRL(0),
-            ctrl_transfer: 0,
-            stat: STAT(0),
+            control: Control(0),
+            control_transfer: 0,
+            status: Status(0),
             volume_cd_left: 0,
             volume_cd_right: 0,
             volume_extern_left: 0,
@@ -104,7 +106,7 @@ impl SPU
     {
         //if addr >= 0x188 && addr <= 0x18F
         {
-        error!("SPU control registers read8 @ {:08X}", addr + SPU_OFFSET);
+        //error!("SPU control registers read8 @ {:08X}", addr + SPU_OFFSET);
         }
 
         /*match addr
@@ -120,8 +122,8 @@ impl SPU
 
         match addr
         {
-            //0x1AA => self.ctrl = CTRL(val),
-            //0x1AE => (), // STAT is read-only
+            //0x1AA => self.control = Control(val),
+            //0x1AE => (), // Status is read-only
             _ => panic!()
         }
 
@@ -132,18 +134,18 @@ impl SPU
     {
         //if addr >= 0x188 && addr <= 0x18F
         {
-        error!("SPU control registers read16 @ {:08X}", addr + SPU_OFFSET);
+        //error!("SPU control registers read16 @ {:08X}", addr + SPU_OFFSET);
         }
 
         match addr
         {
             0 ..= 0x17F => self.voice_data[(addr >> 2) as usize],
 
-            0x188 => ((self.voice_on & 0xFFFF0000) >> 16) as u16,
-            0x18A => (self.voice_on & 0x0000FFFF) as u16,
+            0x188 => self.voice_on as u16,
+            0x18A => (self.voice_on >> 16) as u16,
 
-            0x18C => ((self.voice_off & 0xFFFF0000) >> 16) as u16,
-            0x18E => (self.voice_off & 0x0000FFFF) as u16,
+            0x18C => self.voice_off as u16,
+            0x18E => (self.voice_off >> 16) as u16,
 
             /*
             0x190 => self.channel_pitch = self.channel_pitch & 0x0000FFFF | ((val as u32) << 16),
@@ -160,9 +162,9 @@ impl SPU
             */
             //0x1A2 => 0, // TODO what's this?
 
-            0x1AA => { let CTRL(bits) = self.ctrl; bits },
-            0x1AC => self.ctrl_transfer,
-            0x1AE => { let STAT(bits) = self.stat; bits },
+            0x1AA => self.control.0,
+            0x1AC => self.control_transfer,
+            0x1AE => self.status.0,
 
             _ => panic!()
         }
@@ -179,13 +181,13 @@ impl SPU
     {
         //if addr >= 0x188 && addr <= 0x18F
         {
-        error!("SPU control registers read32 @ {:08X}", addr + SPU_OFFSET);
+       // error!("SPU control registers read32 @ {:08X}", addr + SPU_OFFSET);
         }
 
         match addr
         {
-            //0x1AA => self.ctrl = CTRL(val),
-            //0x1AE => (), // STAT is read-only
+            //0x1AA => self.control = Control(val),
+            //0x1AE => (), // Status is read-only
             _ => panic!()
         }
 
@@ -203,13 +205,13 @@ impl SPU
     {
         //if addr >= 0x188 && addr <= 0x18F
         {
-        error!("SPU control registers write8 {:02X} @ {:08X}", val, addr + SPU_OFFSET);
+        //error!("SPU control registers write8 {:02X} @ {:08X}", val, addr + SPU_OFFSET);
         }
 
         match addr
         {
-            //0x1AA => self.ctrl = CTRL(val),
-            //0x1AE => (), // STAT is read-only
+            //0x1AA => self.control = Control(val),
+            //0x1AE => (), // Status is read-only
             _ => panic!()
         }
 
@@ -220,7 +222,7 @@ impl SPU
     {
         //if addr >= 0x188 && addr <= 0x18F
         {
-        error!("SPU control registers write16 {:04X} @ {:08X}", val, addr + SPU_OFFSET);
+            error!("SPU write16 {:04X} @ {:08X}", val, addr + SPU_OFFSET);
         }
 
         match addr
@@ -232,13 +234,29 @@ impl SPU
             0x184 => self.volume_reverb_left = val,
             0x186 => self.volume_reverb_right = val,
 
-            // TODO not sure about the order (endianness?)
-            0x188 => self.voice_on = self.voice_on & 0x0000FFFF | ((val as u32) << 16),
-            0x18A => self.voice_on = self.voice_on & 0xFFFF0000 | (val as u32),
+            0x188 =>
+            {
+                self.voice_on = (self.voice_on & 0xFFFF0000) | (val as u32);
+                self.channel_status = (self.channel_status & 0xFFFF0000) | (val as u32);
+            },
+            0x18A =>
+            {
+                self.voice_on = (self.voice_on & 0x0000FFFF) | ((val as u32) << 16);
+                self.channel_status = (self.channel_status & 0x0000FFFF) | ((val as u32) << 16);
+            }
 
-            0x18C => self.voice_off = self.voice_off & 0x0000FFFF | ((val as u32) << 16),
-            0x18E => self.voice_off = self.voice_off & 0xFFFF0000 | (val as u32),
+            0x18C =>
+            {
+                self.voice_off = (self.voice_off & 0xFFFF0000) | (val as u32);
+                self.channel_status = (self.channel_status & 0xFFFF0000) & !(val as u32);
+            }
+            0x18E =>
+            {
+                self.voice_off = (self.voice_off & 0x0000FFFF) | ((val as u32) << 16);
+                self.channel_status = (self.channel_status & 0x0000FFFF) & !((val as u32) << 16);
+            }
 
+            // TODO fix endianness
             0x190 => self.channel_pitch = self.channel_pitch & 0x0000FFFF | ((val as u32) << 16),
             0x192 => self.channel_pitch = self.channel_pitch & 0xFFFF0000 | (val as u32),
 
@@ -248,17 +266,18 @@ impl SPU
             0x198 => self.channel_reverb = self.channel_reverb & 0x0000FFFF | ((val as u32) << 16),
             0x19A => self.channel_reverb = self.channel_reverb & 0xFFFF0000 | (val as u32),
 
-            0x19C => self.channel_on = self.channel_on & 0x0000FFFF | ((val as u32) << 16),
-            0x19E => self.channel_on = self.channel_on & 0xFFFF0000 | (val as u32),
-
-            0x1A2 => error!("unimplemented SPU register"),
+            0x1A2 => {},//error!("unimplemented SPU register"),
             0x1A4 => self.address_irq = val,
             0x1A6 => self.address_transfer = val,
-            0x1A8 => error!("unimplemented SPU transfer"),
+            0x1A8 => {},//error!("unimplemented SPU transfer"),
 
-            0x1AA => self.ctrl = CTRL(val),
-            0x1AC => self.ctrl_transfer = val,
-            0x1AE => (), // STAT is read-only
+            0x1AA =>
+            {
+                self.control = Control(val);
+                self.status.set_mode(val & 0x3F); // Update status
+            },
+            0x1AC => self.control_transfer = val,
+            0x1AE => (), // Status is read-only
 
             0x1B0 => self.volume_cd_left = val,
             0x1B2 => self.volume_cd_right = val,
@@ -280,13 +299,13 @@ impl SPU
     {
         //if addr >= 0x188 && addr <= 0x18F
         {
-        error!("SPU control registers write32 {:08X} @ {:08X}", val, addr + SPU_OFFSET);
+        //error!("SPU control registers write32 {:08X} @ {:08X}", val, addr + SPU_OFFSET);
         }
 
         match addr
         {
-            //0x1AA => self.ctrl = CTRL(val),
-            //0x1AE => (), // STAT is read-only
+            //0x1AA => self.control = Control(val),
+            //0x1AE => (), // Status is read-only
             _ => panic!()
         }
 
