@@ -169,7 +169,7 @@ impl Memory
             0x1F801070 => self.interrupt_status = val,
             0x1F801074 => self.interrupt_mask = val,
 
-            0x1F801080 ..= 0x1F8010FF => info!("Ignoring DMA registers write"),
+            0x1F801080 ..= 0x1F8010FF => self.dma.write(addr - 0x1F801080, val, self),
 
             0x1f801810 ..= 0x1F801810 => info!("unsupported GP0 write32"),
             0x1f801814 ..= 0x1F801814 => info!("unsupported GP1 write32"),
