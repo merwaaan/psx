@@ -1,10 +1,11 @@
-use crate::memory::Memory;
+use crate::gpu::GPU;
+use crate::ram::RAM;
 
 #[derive(Debug, Copy, Clone)]
 enum TransferDirection
 {
     ToRAM = 0,
-    ToCPU = 1 // TODO bad name? from ram?
+    FromRAM = 1
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -108,7 +109,7 @@ impl Channel
         };
         self.chopping_enable = ((value >> 8) & 1) != 0;
         self.increment = ((value >> 1) & 1) == 0;
-        self.direction = if (value & 1) == 0 {TransferDirection::ToRAM} else {TransferDirection::ToCPU};
+        self.direction = if (value & 1) == 0 {TransferDirection::ToRAM} else {TransferDirection::FromRAM};
     }
 
     pub fn is_active(&self) -> bool
@@ -211,7 +212,7 @@ impl DMA
         }
     }
 
-    pub fn write(&mut self, offset: u32, value: u32, mem: &mut Memory)
+    pub fn write(&mut self, offset: u32, value: u32, ram: &mut RAM, gpu: &mut GPU)
     {
         match offset
         {
@@ -230,7 +231,7 @@ impl DMA
 
                 if channel.is_active()
                 {
-                    self.transfer(port, mem);
+                    self.transfer(port, ram, gpu);
                 }
             },
 
@@ -244,6 +245,11 @@ impl DMA
     fn channel(&self, port: Port) -> &Channel
     {
         &self.channels[port as usize]
+    }
+
+    fn channel_mut(&mut self, port: Port) -> &mut Channel
+    {
+        &mut self.channels[port as usize]
     }
 
     fn interrupt_register(&self) -> u32
@@ -270,58 +276,158 @@ impl DMA
         self.irq_channel_status &= !reset;
     }
 
-    fn transfer(&mut self, port: Port, mem: &mut Memory)
+    fn transfer(&mut self, port: Port, ram: &mut RAM, gpu: &mut GPU)
     {
         match self.channel(port).sync_mode
         {
-            SyncMode::LinkedList => panic!("unsupported LinkedList DMA mode"),
-            _ => self.transfer_block(port, mem)
+            SyncMode::LinkedList => self.transfer_linked_list(port, ram, gpu),
+            _                    => self.transfer_block(port, ram, gpu)
         }
     }
 
-    fn transfer_block(&mut self, port: Port, mem: &mut Memory)
+    fn transfer_block(&mut self, port: Port, ram: &mut RAM, gpu: &mut GPU)
     {
-        let channel = self.channel(port);
+        let channel = self.channel_mut(port);
 
         // For now, copy everything in one shot
 
-        let step = if channel.increment { 4 } else { -4 };
-        let mut address = channel.base_address;
-
-        let blocks = match channel.sync_mode
+        let mut blocks = match channel.sync_mode
         {
             SyncMode::Manual  => channel.transfer_size,
             SyncMode::Request => channel.transfer_size * channel.block_count,
             _ => panic!("LinkedList not supported in block transfer")
         };
 
+        error!("DMA transfer {:?} {:?} {} {:X} {}", channel.sync_mode, channel.direction, channel.increment, channel.base_address, blocks);
 
-        error!("DMA transfer {:?} {:?} {:X} {}", channel.sync_mode, channel.direction, channel.base_address, blocks);
-        panic!();
+        let mut address = channel.base_address;
 
-        match channel.direction
+        match port
         {
-            TransferDirection::ToRAM =>
+            Port::GPU =>
             {
-                while blocks > 0
+                match channel.direction
                 {
-                    let actual_address = address & 0x1FFFFC; // The address must stay in RAM
-
-                    // TODO other channels than OTC
-                    let value = match blocks
+                    TransferDirection::FromRAM =>
                     {
-                        1 => 0xFFFFFF, // Last entry: end of the table
-                        _ => address.wrapping_sub(4) & 0x1FFFFF // Pointer to the previous entry // TODO sue actual_address?
-                    };
+                        while blocks > 0
+                        {
+                            let actual_address = address & 0x1FFFFC; // The address must stay in RAM & aligned
 
-                    mem.write(actual_address, value);
+                            // TODO other channels than OTC
+                            let value = ram.read32(actual_address);
 
-                    //address = address.wrapping_add(step);
-                    blocks -= 1;
+                            error!("GPU command {:08X}", value);
+                            gpu.gp0(value);
+
+                            //address = address.wrapping_add(step);
+                            address = if channel.increment { address.wrapping_add(4) } else { address.wrapping_sub(4) };
+                            blocks -= 1;
+                        }
+                    },
+
+                    x => panic!("unsupported DMA transfer direction {:?}", x)
                 }
             },
 
-            TransferDirection::ToCPU => panic!("unsupported DMA transfer direction ToCPU")
+            Port::OTC =>
+            {
+                match channel.direction
+                {
+                    TransferDirection::ToRAM =>
+                    {
+                        while blocks > 0
+                        {
+                            let actual_address = address & 0x1FFFFC; // The address must stay in RAM & aligned
+
+                            // TODO other channels than OTC
+                            let value = match blocks
+                            {
+                                1 => 0xFFFFFF, // Last entry: end of the table
+                                _ => actual_address.wrapping_sub(4) & 0x1FFFFF // Pointer to the previous entry
+                            };
+
+                            ram.write32(actual_address, value);
+
+                            error!("{:0X} {:0X}", actual_address, value);
+
+                            //address = address.wrapping_add(step);
+                            address = if channel.increment { address.wrapping_add(4) } else { address.wrapping_sub(4) };
+                            blocks -= 1;
+                        }
+                    },
+
+                    x => panic!("unsupported DMA transfer direction {:?}", x)
+                }
+            },
+
+            x => panic!("unsupported port {:?}", x)
+        }
+
+        // Reset the state
+
+        channel.enable = false;
+        channel.trigger = false;
+    }
+
+    fn transfer_linked_list(&mut self, port: Port, ram: &mut RAM, gpu: &mut GPU)
+    {
+        let channel = self.channel_mut(port);
+
+        // For now, copy everything in one shot
+
+        error!("DMA transfer {:?} {:?} {:X}", channel.sync_mode, channel.direction, channel.base_address,);
+
+        let mut address = channel.base_address & 0x1FFFFC;
+
+        match port
+        {
+            Port::GPU =>
+            {
+                match channel.direction
+                {
+                    TransferDirection::FromRAM =>
+                    {
+                        loop
+                        {
+                            let header = ram.read32(address);
+
+                            // Send the commands to the GPU
+
+                            let mut word_count = header >> 24;
+                            error!("word count {}", word_count);
+
+                            while word_count > 0
+                            {
+                                address = address.wrapping_add(4) & 0x1FFFFC;
+                                let value = ram.read32(address);
+
+                                error!("GPU command {:08X}", value);
+                                gpu.gp0(value);
+
+                                word_count -= 1;
+                            }
+
+                            // Check if we hit the end of the linked list
+                            //
+                            // The marker is 0xFFFFFF though?
+
+                            if (header & 800000) != 0
+                            {
+                                break;
+                            }
+
+                            // Go to the next entry in the linked list
+
+                            address = header & 0x1FFFFC;
+                        }
+                    },
+
+                    x => panic!("unsupported DMA transfer direction {:?}", x)
+                }
+            },
+
+            x => panic!("unsupported port {:?}", x)
         }
 
         // Reset the state

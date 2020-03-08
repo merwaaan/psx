@@ -5,7 +5,9 @@ mod bios;
 mod cpu;
 mod dma;
 mod debugger;
+mod gpu;
 mod memory;
+mod ram;
 mod spu;
 
 #[macro_use]
