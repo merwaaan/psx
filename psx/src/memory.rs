@@ -10,7 +10,7 @@ pub struct Memory
 {
     bios: BIOS,
     dma: DMA,
-    gpu: GPU,
+    pub gpu: GPU,
     ram: RAM,
     pub spu: SPU,
 
@@ -97,7 +97,7 @@ impl Memory
             0x1F801080 ..= 0x1F8010FF => self.dma.read(addr - 0x1F801080),
 
             0x1F801810 ..= 0x1F801810 => self.gpu.read(),
-            0x1F801814 ..= 0x1F801814 => { error!("unsupported GPUSTAT read32"); 0x1C000000 } // Ready for now (bit 28)
+            0x1F801814 ..= 0x1F801814 => self.gpu.status(),
 
             0x1F801C00 ..= 0x1F801E80 => self.spu.read32(addr - 0x1F801C00),
 

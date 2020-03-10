@@ -1,4 +1,5 @@
 use crate::cpu::CPU;
+use crate::gpu::GPU;
 use crate::memory::Memory;
 
 use std::path::Path;
@@ -34,8 +35,14 @@ impl PSX
         self.cpu.step(&mut self.mem);
     }
 
-    pub fn run(&mut self)
+    pub fn run(&mut self, instructions: u32) -> bool
     {
-        self.cpu.run(&mut self.mem);
+        self.cpu.run(instructions, &mut self.mem)
+    }
+
+    // TEMP
+    pub fn gpu(&self) -> &GPU
+    {
+        &self.mem.gpu
     }
 }

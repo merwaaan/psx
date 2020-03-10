@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 #[derive(Debug, Copy, Clone)]
 enum DMADirection
 {
@@ -61,6 +63,16 @@ enum Field
     Top = 1
 }
 
+#[derive(Debug, Copy, Clone)]
+pub enum Port
+{
+    GP0 = 0,
+    GP1 = 1
+}
+
+#[derive(Debug)]
+pub struct Command(pub Port, pub u32);
+
 pub struct GPU
 {
     // Status
@@ -84,6 +96,8 @@ pub struct GPU
     texture_page_base_y: u8,
     texture_page_base_x: u8,
 
+    // Internal state
+
     texture_flip_x: bool,
     texture_flip_y: bool,
     texture_window_offset_y: u8,
@@ -102,7 +116,11 @@ pub struct GPU
     display_horizontal_end: u16,
     display_horizontal_start: u16,
     display_vertical_end: u16,
-    display_vertical_start: u16
+    display_vertical_start: u16,
+
+    // Debugging
+
+    pub previous_commands: VecDeque<Command>
 }
 
 impl GPU
@@ -148,8 +166,58 @@ impl GPU
             display_horizontal_end: 0,
             display_horizontal_start: 0,
             display_vertical_end: 0,
-            display_vertical_start: 0
+            display_vertical_start: 0,
+
+            previous_commands: VecDeque::with_capacity(100)
         }
+    }
+
+    fn enqueue_command(&mut self, port: Port, command: u32)
+    {
+        if self.previous_commands.len() == 100
+        {
+            self.previous_commands.pop_front();
+        }
+
+        self.previous_commands.push_back(Command(port, command))
+    }
+
+    pub fn disassemble(&self, command: &Command) -> String
+    {
+        let opcode = command.1 >> 24;
+
+        let description = match command.0
+        {
+            Port::GP0 =>
+            {
+                match opcode
+                {
+                    0x00 => "NOP",
+                    0xE1 => "Draw mode",
+                    0xE2 => "Texture window",
+                    0xE3 => "Drawing area top left",
+                    0xE4 => "Drawing area bottom right",
+                    0xE5 => "Drawing offset",
+                    0xE6 => "Mask bit setting",
+                    _ => "[UNSUPPORTED COMMAND]"
+                }
+            },
+            Port::GP1 =>
+            {
+                match opcode
+                {
+                    0x00 => "Reset",
+                    0x04 => "Setup DMA",
+                    0x05 => "Start of display area",
+                    0x06 => "Horizontal display range",
+                    0x07 => "Vertical display range",
+                    0x08 => "Display mode",
+                    _ => "[UNSUPPORTED COMMAND]"
+                }
+            },
+        };
+
+        String::from(description)
     }
 
     pub fn status(&self) -> u32
@@ -193,39 +261,43 @@ impl GPU
         0
     }
 
-    pub fn gp0(&mut self, value: u32)
+    pub fn gp0(&mut self, command: u32)
     {
-        let opcode = value >> 24;
+        let opcode = command >> 24;
 
         match opcode
         {
             0x00 => (), // NOP
-            0xE1 => self.gp0_draw_mode(value),
-            0xE2 => self.gp0_texture_window(value),
-            0xE3 => self.gp0_drawing_area_top_left(value),
-            0xE4 => self.gp0_drawing_area_bottom_right(value),
-            0xE5 => self.gp0_drawing_offset(value),
-            0xE6 => self.gp0_mask_bit_setting(value),
+            0xE1 => self.gp0_draw_mode(command),
+            0xE2 => self.gp0_texture_window(command),
+            0xE3 => self.gp0_drawing_area_top_left(command),
+            0xE4 => self.gp0_drawing_area_bottom_right(command),
+            0xE5 => self.gp0_drawing_offset(command),
+            0xE6 => self.gp0_mask_bit_setting(command),
 
             _ => panic!("unsupported GP0 opcode {:0X}", opcode)
         }
+
+        self.enqueue_command(Port::GP0, command);
     }
 
-    pub fn gp1(&mut self, value: u32)
+    pub fn gp1(&mut self, command: u32)
     {
-        let opcode = value >> 24;
+        let opcode = command >> 24;
 
         match opcode
         {
-            0x00 => self.gp1_reset(value),
-            0x04 => self.gp1_dma_setup(value),
-            0x05 => self.gp1_display_vram_start(value),
-            0x06 => self.gp1_display_horizontal_range(value),
-            0x07 => self.gp1_display_vertical_range(value),
-            0x08 => self.gp1_display_mode(value),
+            0x00 => self.gp1_reset(command),
+            0x04 => self.gp1_dma_setup(command),
+            0x05 => self.gp1_display_vram_start(command),
+            0x06 => self.gp1_display_horizontal_range(command),
+            0x07 => self.gp1_display_vertical_range(command),
+            0x08 => self.gp1_display_mode(command),
 
             _ => panic!("unsupported GP1 opcode {:0X}", opcode)
         }
+
+        self.enqueue_command(Port::GP1, command);
     }
 
     fn gp0_draw_mode(&mut self, value: u32)

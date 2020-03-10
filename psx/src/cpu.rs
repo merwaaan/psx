@@ -84,15 +84,18 @@ impl CPU
         }
     }
 
-    pub fn run(&mut self, mem: &mut Memory)
+    // Returns false if interrupted by a breakpoint
+    pub fn run(&mut self, instructions: u32, mem: &mut Memory) -> bool
     {
-        loop
+        for _ in 0 .. instructions
         {
             if !self.step(mem)
             {
-                return;
+                return false;
             }
         }
+
+        true
     }
 
     pub fn step(&mut self, mem: &mut Memory) -> bool
@@ -125,8 +128,8 @@ impl CPU
         // CONTINUE: exception not taken @ 19258534 (log exception to file?)
         //3394000 r13 diff due to SPU capture buffer half flag
 
-        if self.counter >= 19250000 && self.counter < 19260000
-        //if self.counter % 10000 == 0
+        //if self.counter >= 19240000 && self.counter < 19270000
+        if self.counter % 10000 == 0
         {
             // debug logging
 

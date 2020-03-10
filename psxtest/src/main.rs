@@ -24,7 +24,7 @@ fn main()
 
     //
 
-    let mut is_paused = true;
+    let mut is_running = false;
     let mut new_breakpoint: i32 = 0;
     let mut memory_current_address: i32 = 0;
 
@@ -41,15 +41,20 @@ fn main()
             }
         }*/
 
+        // F1: Step
         if ui.is_key_released(37)
         {
             p.step();
         }
+        // F2: Resume/Stop
         else if ui.is_key_released(38)
         {
-            is_paused = false;
-            p.run();
-            is_paused = true;
+            is_running = !is_running;
+        }
+
+        if is_running
+        {
+            is_running = p.run(1_000_000);
         }
 
         Window::new(im_str!("Breakpoints"))
@@ -188,7 +193,6 @@ fn main()
                 ui.same_line(0.0);
             });
 
-
         Window::new(im_str!("SPU"))
             .position([400.0, 300.0], Condition::FirstUseEver)
             .size([200.0, 0.0], Condition::FirstUseEver)
@@ -216,15 +220,43 @@ fn main()
                 }
             });
 
-        /*if is_paused
+        Window::new(im_str!("GPU"))
+            .position([500.0, 400.0], Condition::FirstUseEver)
+            .size([400.0, 0.0], Condition::Always)
+            .build(ui, ||
+            {
+                // GPU status
+
+                // TODO
+
+                // Commands
+
+                ui.text(im_str!("Commands"));
+
+                ui.columns(3, im_str!(""), false);
+
+                for command in p.gpu().previous_commands.iter()
+                {
+                    ui.text(format!("GP{}", command.0 as u8));
+                    ui.next_column();
+
+                    ui.text(format!("{:08X}", command.1));
+                    ui.next_column();
+
+                    ui.text(format!("{}", p.gpu().disassemble(command)));
+                    ui.next_column();
+                }
+            });
+
+        if !is_running
         {
             Window::new(im_str!("Pause"))
-                .position([500.0, 500.0], Condition::FirstUseEver)
+                .position([500.0, 0.0], Condition::FirstUseEver)
                 .size([0.0, 0.0], Condition::FirstUseEver)
                 .build(ui, ||
                 {
                     ui.text(im_str!("paused"));
                 });
-        }*/
+        }
     });
 }
