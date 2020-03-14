@@ -298,7 +298,7 @@ impl DMA
             _ => panic!("LinkedList not supported in block transfer")
         };
 
-        error!("DMA transfer {:?} {:?} {} {:X} {}", channel.sync_mode, channel.direction, channel.increment, channel.base_address, blocks);
+        info!("DMA transfer {:?} {:?} {} {:X} {}", channel.sync_mode, channel.direction, channel.increment, channel.base_address, blocks);
 
         let mut address = channel.base_address;
 
@@ -317,7 +317,7 @@ impl DMA
                             // TODO other channels than OTC
                             let value = ram.read32(actual_address);
 
-                            error!("GPU command {:08X}", value);
+                            info!("GPU command {:08X}", value);
                             gpu.gp0(value);
 
                             //address = address.wrapping_add(step);
@@ -349,7 +349,7 @@ impl DMA
 
                             ram.write32(actual_address, value);
 
-                            error!("{:0X} {:0X}", actual_address, value);
+                            info!("{:0X} {:0X}", actual_address, value);
 
                             //address = address.wrapping_add(step);
                             address = if channel.increment { address.wrapping_add(4) } else { address.wrapping_sub(4) };
@@ -376,7 +376,7 @@ impl DMA
 
         // For now, copy everything in one shot
 
-        error!("DMA transfer {:?} {:?} {:X}", channel.sync_mode, channel.direction, channel.base_address,);
+        info!("DMA transfer {:?} {:?} {:X}", channel.sync_mode, channel.direction, channel.base_address,);
 
         let mut address = channel.base_address & 0x1FFFFC;
 
@@ -391,35 +391,36 @@ impl DMA
                         loop
                         {
                             let header = ram.read32(address);
+                            info!("header {:08X}", header);
 
                             // Send the commands to the GPU
 
                             let mut word_count = header >> 24;
-                            error!("word count {}", word_count);
+                            let next_address = header & 0x1FFFFF; // TODO align?
+                            info!("word count {}, next {:08X}", word_count, next_address);
 
                             while word_count > 0
                             {
                                 address = address.wrapping_add(4) & 0x1FFFFC;
                                 let value = ram.read32(address);
 
-                                error!("GPU command {:08X}", value);
+                                info!("GPU command {:08X}", value);
                                 gpu.gp0(value);
 
                                 word_count -= 1;
                             }
 
                             // Check if we hit the end of the linked list
-                            //
-                            // The marker is 0xFFFFFF though?
 
-                            if (header & 800000) != 0
+                            if (header & 0xFFFFFF) == 0xFFFFFF // the psx guide & mednafen check only the msb though
                             {
+                                info!("STOP");
                                 break;
                             }
 
                             // Go to the next entry in the linked list
 
-                            address = header & 0x1FFFFC;
+                            address = next_address;
                         }
                     },
 

@@ -222,7 +222,7 @@ impl SPU
     {
         //if addr >= 0x188 && addr <= 0x18F
         {
-            error!("SPU write16 {:04X} @ {:08X}", val, addr + SPU_OFFSET);
+            info!("SPU write16 {:04X} @ {:08X}", val, addr + SPU_OFFSET);
         }
 
         match addr

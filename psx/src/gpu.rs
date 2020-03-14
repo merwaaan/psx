@@ -1,3 +1,4 @@
+use crate::renderer::{ Color, Position, Renderer };
 use std::collections::VecDeque;
 
 #[derive(Debug, Copy, Clone)]
@@ -73,6 +74,56 @@ pub enum Port
 #[derive(Debug)]
 pub struct Command(pub Port, pub u32);
 
+struct CommandBuffer
+{
+    data: [u32; 12], // 12 is the longest command size
+    current_length: usize
+}
+
+impl CommandBuffer
+{
+    fn new() -> CommandBuffer
+    {
+        CommandBuffer
+        {
+            data: [0; 12],
+            current_length: 0
+        }
+    }
+
+    fn clear(&mut self)
+    {
+        self.current_length = 0;
+    }
+
+    fn push(&mut self, word: u32)
+    {
+        self.data[self.current_length] = word;
+        self.current_length += 1;
+    }
+}
+
+impl ::std::ops::Index<usize> for CommandBuffer
+{
+    type Output = u32;
+
+    fn index<'a>(&'a self, i: usize) -> &'a u32
+    {
+        if i > self.current_length
+        {
+            panic!("Command buffer index out of range: {} ({})", i, self.current_length);
+        }
+
+        &self.data[i]
+    }
+}
+
+enum GP0Mode
+{
+    Command,
+    LoadImage
+}
+
 pub struct GPU
 {
     // Status
@@ -118,9 +169,18 @@ pub struct GPU
     display_vertical_end: u16,
     display_vertical_start: u16,
 
+    // Command buffering
+
+    gp0_command_buffer: CommandBuffer,
+    gp0_command_method: fn(&mut GPU),
+    gp0_words_remaining: u32,
+    gp0_mode: GP0Mode,
+
     // Debugging
 
-    pub previous_commands: VecDeque<Command>
+    pub previous_commands: VecDeque<Command>,
+
+    renderer: Renderer
 }
 
 impl GPU
@@ -168,7 +228,14 @@ impl GPU
             display_vertical_end: 0,
             display_vertical_start: 0,
 
-            previous_commands: VecDeque::with_capacity(100)
+            previous_commands: VecDeque::with_capacity(100),
+
+            gp0_command_buffer: CommandBuffer::new(),
+            gp0_command_method: GPU::gp0_nop,
+            gp0_words_remaining: 0,
+            gp0_mode: GP0Mode::Command,
+
+            renderer: Renderer::new()
         }
     }
 
@@ -230,7 +297,7 @@ impl GPU
             DMADirection::GPUToCPU => 1  // same as bit 27
         };
 
-        0 << 31 | // TODO
+        1 << 31 | // TODO
         (self.dma_direction as u32) << 29 |
         (1 << 28) |
         (1 << 27) |
@@ -241,7 +308,7 @@ impl GPU
         (self.interlace as u32) << 22 |
         (self.display_depth as u32) << 21 |
         (self.video_mode as u32) << 20 |
-        (self.resolution_vertical as u32) << 19 |
+        // DISABLED FOR NOW SO WORK AROUND THE BIT31 ENDLESS LOOP (self.resolution_vertical as u32) << 19 |
         self.resolution_horizontal.into_status() |
         (self.texture_disable as u32) << 15 |
         (self.field as u32) << 13 |
@@ -263,46 +330,135 @@ impl GPU
 
     pub fn gp0(&mut self, command: u32)
     {
-        let opcode = command >> 24;
+        // No command being buffered, we start a new one
 
-        match opcode
+        if self.gp0_words_remaining == 0
         {
-            0x00 => (), // NOP
-            0xE1 => self.gp0_draw_mode(command),
-            0xE2 => self.gp0_texture_window(command),
-            0xE3 => self.gp0_drawing_area_top_left(command),
-            0xE4 => self.gp0_drawing_area_bottom_right(command),
-            0xE5 => self.gp0_drawing_offset(command),
-            0xE6 => self.gp0_mask_bit_setting(command),
+            let opcode = command >> 24;
 
-            _ => panic!("unsupported GP0 opcode {:0X}", opcode)
+            let (method, word_count) = match opcode
+            {
+                0x00 => (GPU::gp0_nop as fn(&mut GPU), 1),
+                0x01 => (GPU::gp0_clear_cache as fn(&mut GPU), 1),
+                0x28 => (GPU::gp0_draw_quad_mono_opaque as fn(&mut GPU), 5),
+                0x2C => (GPU::gp0_draw_quad_textured_opaque as fn(&mut GPU), 9),
+                0x30 => (GPU::gp0_draw_triangle_shaded_opaque as fn(&mut GPU), 6),
+                0x38 => (GPU::gp0_draw_quad_shaded_opaque as fn(&mut GPU), 8),
+                0xA0 => (GPU::gp0_load_image as fn(&mut GPU), 3),
+                0xC0 => (GPU::gp0_store_image as fn(&mut GPU), 3),
+                0xE1 => (GPU::gp0_draw_mode as fn(&mut GPU), 1),
+                0xE2 => (GPU::gp0_texture_window as fn(&mut GPU), 1),
+                0xE3 => (GPU::gp0_drawing_area_top_left as fn(&mut GPU), 1),
+                0xE4 => (GPU::gp0_drawing_area_bottom_right as fn(&mut GPU), 1),
+                0xE5 => (GPU::gp0_drawing_offset as fn(&mut GPU), 1),
+                0xE6 => (GPU::gp0_mask_bit_setting as fn(&mut GPU), 1),
+
+                _ => panic!("unsupported GP0 opcode {:0X}", opcode)
+            };
+
+            self.gp0_command_method = method;
+            self.gp0_command_buffer.clear();
+            self.gp0_words_remaining = word_count;
+
+            self.enqueue_command(Port::GP0, command);
         }
 
-        self.enqueue_command(Port::GP0, command);
-    }
+        self.gp0_words_remaining -= 1;
 
-    pub fn gp1(&mut self, command: u32)
-    {
-        let opcode = command >> 24;
-
-        match opcode
+        match self.gp0_mode
         {
-            0x00 => self.gp1_reset(command),
-            0x04 => self.gp1_dma_setup(command),
-            0x05 => self.gp1_display_vram_start(command),
-            0x06 => self.gp1_display_horizontal_range(command),
-            0x07 => self.gp1_display_vertical_range(command),
-            0x08 => self.gp1_display_mode(command),
+            GP0Mode::Command =>
+            {
+                // Push the current word to the command buffer
+                self.gp0_command_buffer.push(command);
 
-            _ => panic!("unsupported GP1 opcode {:0X}", opcode)
+                // Execute the command if we accumulated all the parameters
+                if self.gp0_words_remaining == 0
+                {
+                    (self.gp0_command_method)(self);
+                }
+            },
+
+            GP0Mode::LoadImage =>
+            {
+                // TODO LOAD
+
+                if self.gp0_words_remaining == 0
+                {
+                    self.gp0_mode = GP0Mode::Command;
+                }
+            }
         }
-
-        self.enqueue_command(Port::GP1, command);
     }
 
-    fn gp0_draw_mode(&mut self, value: u32)
+    // GP0
+
+    fn gp0_nop(&mut self)
     {
-        error!("gp0 {:08X}", value);
+    }
+
+    fn gp0_clear_cache(&mut self)
+    {
+    }
+
+    fn gp0_draw_quad_mono_opaque(&mut self)
+    {
+    }
+
+    fn gp0_draw_quad_textured_opaque(&mut self)
+    {
+    }
+
+    fn gp0_draw_triangle_shaded_opaque(&mut self)
+    {
+        let positions =
+        [
+            Position::from_command(self.gp0_command_buffer[1]),
+            Position::from_command(self.gp0_command_buffer[3]),
+            Position::from_command(self.gp0_command_buffer[5])
+        ];
+
+        let colors =
+        [
+            Color::from_command(self.gp0_command_buffer[0]),
+            Color::from_command(self.gp0_command_buffer[2]),
+            Color::from_command(self.gp0_command_buffer[4])
+        ];
+
+        self.renderer.push_triangle(&positions, &colors); // TODO move?
+    }
+
+    fn gp0_draw_quad_shaded_opaque(&mut self)
+    {
+    }
+
+    fn gp0_load_image(&mut self)
+    {
+        let resolution = self.gp0_command_buffer[2];
+        let width = resolution & 0xFFFF;
+        let height = resolution >> 16;
+
+        let image_size = width * height;
+
+        self.gp0_words_remaining = image_size / 2;
+        self.gp0_mode = GP0Mode::LoadImage;
+
+        // Handle even pixel counts.
+        // Since we read two pixels for each byte, we might need another word for the last pixel.
+        if image_size % 2 == 1
+        {
+            self.gp0_words_remaining += 1;
+        }
+    }
+
+    fn gp0_store_image(&mut self)
+    {
+        error!("unsupported GP0 store image");
+    }
+
+    fn gp0_draw_mode(&mut self)
+    {
+        let value = self.gp0_command_buffer[0];
 
         self.texture_flip_y = ((value >> 13) & 1) != 0;
         self.texture_flip_x = ((value >> 12) & 1) != 0;
@@ -323,30 +479,38 @@ impl GPU
         self.texture_page_base_x = (value & 0xF) as u8;
     }
 
-    fn gp0_texture_window(&mut self, value: u32)
+    fn gp0_texture_window(&mut self)
     {
+        let value = self.gp0_command_buffer[0];
+
         self.texture_window_offset_y = ((value >> 15) & 0x1F) as u8;
         self.texture_window_offset_x = ((value >> 10) & 0x1F) as u8;
         self.texture_window_mask_y = ((value >> 5) & 0x1F) as u8;
         self.texture_window_mask_x = (value & 0x1F) as u8;
     }
 
-    fn gp0_drawing_area_top_left(&mut self, value: u32)
+    fn gp0_drawing_area_top_left(&mut self)
     {
+        let value = self.gp0_command_buffer[0];
+
         // Y: 19-10, X: 9-0
         self.drawing_area_top = ((value >> 10) & 0x3FF) as u16;
         self.drawing_area_left = (value & 0x3FF) as u16;
     }
 
-    fn gp0_drawing_area_bottom_right(&mut self, value: u32)
+    fn gp0_drawing_area_bottom_right(&mut self)
     {
+        let value = self.gp0_command_buffer[0];
+
         // Y: 19-10, X: 9-0
         self.drawing_area_bottom = ((value >> 10) & 0x3FF) as u16;
         self.drawing_area_right = (value & 0x3FF) as u16;
     }
 
-    fn gp0_drawing_offset(&mut self, value: u32)
+    fn gp0_drawing_offset(&mut self)
     {
+        let value = self.gp0_command_buffer[0];
+
         // Y: 21-11, X: 10-0
         let x = (value & 0x7FF) as u16;
         let y = ((value >> 11) & 0x7FF) as u16;
@@ -357,10 +521,36 @@ impl GPU
         self.drawing_offset_y = ((y << 5) as i16) >> 5;
     }
 
-    fn gp0_mask_bit_setting(&mut self, value: u32)
+    fn gp0_mask_bit_setting(&mut self)
     {
+        let value = self.gp0_command_buffer[0];
+
         self.ignore_masked_pixels = (value & 2) != 0; // Bit 2
         self.force_mask_bit = (value & 1) != 0; // Bit 1
+    }
+
+    // GP1
+
+    pub fn gp1(&mut self, command: u32)
+    {
+        let opcode = command >> 24;
+
+        match opcode
+        {
+            0x00 => self.gp1_reset(command),
+            0x01 => self.gp1_reset_command_buffer(command),
+            0x02 => self.gp1_acknowledge_irq(command),
+            0x03 => self.gp1_enable_display(command),
+            0x04 => self.gp1_dma_setup(command),
+            0x05 => self.gp1_display_vram_start(command),
+            0x06 => self.gp1_display_horizontal_range(command),
+            0x07 => self.gp1_display_vertical_range(command),
+            0x08 => self.gp1_display_mode(command),
+
+            _ => panic!("unsupported GP1 opcode {:0X}", opcode)
+        }
+
+        self.enqueue_command(Port::GP1, command);
     }
 
     fn gp1_reset(&mut self, value: u32)
@@ -403,6 +593,25 @@ impl GPU
         self.display_horizontal_start = 0;
         self.display_vertical_end = 0;
         self.display_vertical_start = 0;
+
+        self.gp1_reset_command_buffer(value);
+    }
+
+    fn gp1_reset_command_buffer(&mut self, value: u32)
+    {
+        self.gp0_command_buffer.clear();
+        self.gp0_words_remaining = 0;
+        self.gp0_mode = GP0Mode::Command;
+    }
+
+    fn gp1_acknowledge_irq(&mut self, value: u32)
+    {
+        // TODO
+    }
+
+    fn gp1_enable_display(&mut self, value: u32)
+    {
+        self.display_disable = (value & 1) != 0;
     }
 
     fn gp1_dma_setup(&mut self, value: u32)

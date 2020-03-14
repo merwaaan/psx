@@ -28,7 +28,7 @@ fn main()
     let mut new_breakpoint: i32 = 0;
     let mut memory_current_address: i32 = 0;
 
-    let system = support::init(file!());
+    let system = support::init(1800, 1000, file!());
     system.main_loop(move |_run, ui|
     {
         //ui.show_demo_window(run);
@@ -221,13 +221,13 @@ fn main()
             });
 
         Window::new(im_str!("GPU"))
-            .position([500.0, 400.0], Condition::FirstUseEver)
-            .size([400.0, 0.0], Condition::Always)
+            .position([500.0, 300.0], Condition::FirstUseEver)
+            .size([400.0, 400.0], Condition::FirstUseEver)
             .build(ui, ||
             {
                 // GPU status
 
-                // TODO
+                ui.text(format!("Status: {:08X}", p.gpu().status()));
 
                 // Commands
 

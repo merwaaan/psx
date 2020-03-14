@@ -128,8 +128,8 @@ impl CPU
         // CONTINUE: exception not taken @ 19258534 (log exception to file?)
         //3394000 r13 diff due to SPU capture buffer half flag
 
-        //if self.counter >= 19240000 && self.counter < 19270000
-        if self.counter % 10000 == 0
+        if self.counter >= 19600000 && self.counter < 19700000
+        //if self.counter % 10000 == 0
         {
             // debug logging
 

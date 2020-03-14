@@ -8,6 +8,7 @@ mod debugger;
 mod gpu;
 mod memory;
 mod ram;
+mod renderer;
 mod spu;
 
 #[macro_use]
