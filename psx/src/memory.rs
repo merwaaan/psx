@@ -20,13 +20,13 @@ pub struct Memory
 
 impl Memory
 {
-    pub fn new(bios_path: &Path) -> Self
+    pub fn new(bios_path: &Path, display: &glium::Display) -> Self
     {
         Memory
         {
             bios: BIOS::new(bios_path),
             dma: DMA::new(),
-            gpu: GPU::new(),
+            gpu: GPU::new(display),
             ram: RAM::new(),
             spu: SPU::new(),
 

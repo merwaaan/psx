@@ -12,11 +12,11 @@ pub struct PSX
 
 impl PSX
 {
-    pub fn new(bios_path: &Path) -> Self
+    pub fn new(bios_path: &Path, display: &glium::Display) -> Self
     {
         env_logger::init();
 
-        let mem = Memory::new(bios_path);
+        let mem = Memory::new(bios_path, display);
 
         PSX
         {
@@ -44,5 +44,9 @@ impl PSX
     pub fn gpu(&self) -> &GPU
     {
         &self.mem.gpu
+    }
+    pub fn gpu_mut(&mut self) -> &mut GPU
+    {
+        &mut self.mem.gpu
     }
 }

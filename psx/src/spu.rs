@@ -201,7 +201,7 @@ impl SPU
         (b3 << 24) | (b2 << 16) | (b1 << 8) | b0*/
     }
 
-    pub fn write8(&mut self, addr: u32, val: u8)
+    pub fn write8(&mut self, addr: u32, _val: u8)
     {
         //if addr >= 0x188 && addr <= 0x18F
         {
@@ -295,7 +295,7 @@ impl SPU
         self.data[offset + 1] = (val >> 8) as u8;*/
     }
 
-    pub fn write32(&mut self, addr: u32, val: u32)
+    pub fn write32(&mut self, addr: u32, _val: u32)
     {
         //if addr >= 0x188 && addr <= 0x18F
         {

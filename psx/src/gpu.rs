@@ -185,7 +185,7 @@ pub struct GPU
 
 impl GPU
 {
-    pub fn new() -> GPU
+    pub fn new(display: &glium::Display) -> GPU
     {
         GPU
         {
@@ -235,8 +235,13 @@ impl GPU
             gp0_words_remaining: 0,
             gp0_mode: GP0Mode::Command,
 
-            renderer: Renderer::new()
+            renderer: Renderer::new(display)
         }
+    }
+
+    pub fn render(&mut self, target: &mut glium::Frame)
+    {
+        self.renderer.render(target);
     }
 
     fn enqueue_command(&mut self, port: Port, command: u32)
@@ -260,6 +265,13 @@ impl GPU
                 match opcode
                 {
                     0x00 => "NOP",
+                    0x01 => "Clear cache",
+                    0x28 => "Draw quad monochrome opaque",
+                    0x2C => "Draw quad textured opaque",
+                    0x30 => "Draw triangle shaded opaque",
+                    0x38 => "Draw quad shaded opaque",
+                    0xA0 => "Load image",
+                    0xC0 => "Store image",
                     0xE1 => "Draw mode",
                     0xE2 => "Texture window",
                     0xE3 => "Drawing area top left",
@@ -274,6 +286,9 @@ impl GPU
                 match opcode
                 {
                     0x00 => "Reset",
+                    0x01 => "Reset command buffer",
+                    0x02 => "Acknowledge IRQ",
+                    0x03 => "Enable display",
                     0x04 => "Setup DMA",
                     0x05 => "Start of display area",
                     0x06 => "Horizontal display range",
@@ -403,10 +418,32 @@ impl GPU
 
     fn gp0_draw_quad_mono_opaque(&mut self)
     {
+        let positions =
+        [
+            Position::from_command(self.gp0_command_buffer[1]),
+            Position::from_command(self.gp0_command_buffer[2]),
+            Position::from_command(self.gp0_command_buffer[3]),
+            Position::from_command(self.gp0_command_buffer[4])
+        ];
+
+        let colors = [Color::from_command(self.gp0_command_buffer[0]); 4];
+
+        self.renderer.push_quad(positions, colors);
     }
 
     fn gp0_draw_quad_textured_opaque(&mut self)
     {
+        let positions =
+        [
+            Position::from_command(self.gp0_command_buffer[1]),
+            Position::from_command(self.gp0_command_buffer[2]),
+            Position::from_command(self.gp0_command_buffer[3]),
+            Position::from_command(self.gp0_command_buffer[4])
+        ];
+
+        let colors = [Color(255, 20, 147); 4]; // TEMP FAKE COLOR
+
+        self.renderer.push_quad(positions, colors);
     }
 
     fn gp0_draw_triangle_shaded_opaque(&mut self)
@@ -425,11 +462,28 @@ impl GPU
             Color::from_command(self.gp0_command_buffer[4])
         ];
 
-        self.renderer.push_triangle(&positions, &colors); // TODO move?
+        self.renderer.push_triangle(positions, colors);
     }
 
     fn gp0_draw_quad_shaded_opaque(&mut self)
     {
+        let positions =
+        [
+            Position::from_command(self.gp0_command_buffer[1]),
+            Position::from_command(self.gp0_command_buffer[3]),
+            Position::from_command(self.gp0_command_buffer[5]),
+            Position::from_command(self.gp0_command_buffer[7])
+        ];
+
+        let colors =
+        [
+            Color::from_command(self.gp0_command_buffer[0]),
+            Color::from_command(self.gp0_command_buffer[2]),
+            Color::from_command(self.gp0_command_buffer[4]),
+            Color::from_command(self.gp0_command_buffer[6])
+        ];
+
+        self.renderer.push_quad(positions, colors);
     }
 
     fn gp0_load_image(&mut self)
@@ -597,14 +651,14 @@ impl GPU
         self.gp1_reset_command_buffer(value);
     }
 
-    fn gp1_reset_command_buffer(&mut self, value: u32)
+    fn gp1_reset_command_buffer(&mut self, _value: u32)
     {
         self.gp0_command_buffer.clear();
         self.gp0_words_remaining = 0;
         self.gp0_mode = GP0Mode::Command;
     }
 
-    fn gp1_acknowledge_irq(&mut self, value: u32)
+    fn gp1_acknowledge_irq(&mut self, _value: u32)
     {
         // TODO
     }

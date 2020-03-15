@@ -11,3 +11,4 @@ serde = { version = "1.0.104", features = ["derive"] }
 serde_derive = "1.0.104"
 serde_json = "1.0.48"
 bitfield = "0.13.2"
+glium = { version = "0.26", default-features = true }

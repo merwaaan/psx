@@ -10,7 +10,9 @@ mod support;
 
 fn main()
 {
-    // Load the BIOS
+    let system = support::init(1600, 800, file!());
+
+    // Initialize the emulation
 
     let args: Vec<String> = env::args().collect();
     if args.len() < 2
@@ -18,18 +20,17 @@ fn main()
         panic!("Usage: psxtest <bios>");
     }
 
-    let mut p = PSX::new(&Path::new(&args[1]));
+    let mut p = PSX::new(&Path::new(&args[1]), &system.display);
 
     p.cpu.debugger.load("debugger.json").expect("cannot load debugger");
-
-    //
 
     let mut is_running = false;
     let mut new_breakpoint: i32 = 0;
     let mut memory_current_address: i32 = 0;
 
-    let system = support::init(1800, 1000, file!());
-    system.main_loop(move |_run, ui|
+    // Build the UI
+
+    system.main_loop(p, move |_run, ui, p|
     {
         //ui.show_demo_window(run);
 
@@ -45,6 +46,7 @@ fn main()
         if ui.is_key_released(37)
         {
             p.step();
+            //p.gpu().render(&system.display);
         }
         // F2: Resume/Stop
         else if ui.is_key_released(38)
@@ -55,11 +57,13 @@ fn main()
         if is_running
         {
             is_running = p.run(1_000_000);
+            //p.gpu().render(&system.display);
         }
 
         Window::new(im_str!("Breakpoints"))
             .position([0.0, 0.0], Condition::FirstUseEver)
             .size([300.0, 0.0], Condition::FirstUseEver)
+            .collapsed(true, Condition::FirstUseEver)
             .build(ui, ||
             {
                 ui.text(format!("Counter: {}", p.cpu.counter));
@@ -96,6 +100,7 @@ fn main()
         Window::new(im_str!("Registers"))
             .position([0.0, 100.0], Condition::FirstUseEver)
             .size([400.0, 0.0], Condition::FirstUseEver)
+            .collapsed(true, Condition::FirstUseEver)
             .build(ui, ||
             {
                 ui.text(format!("PC {:08X}", p.cpu.pc));
@@ -130,6 +135,7 @@ fn main()
         Window::new(im_str!("Instructions"))
             .position([0.0, 400.0], Condition::FirstUseEver)
             .size([0.0, 0.0], Condition::FirstUseEver)
+            .collapsed(true, Condition::FirstUseEver)
             .build(ui, ||
             {
                 for i in 0..10
@@ -146,6 +152,7 @@ fn main()
         Window::new(im_str!("Memory"))
             .position([500.0, 0.0], Condition::FirstUseEver)
             .size([0.0, 0.0], Condition::FirstUseEver)
+            .collapsed(true, Condition::FirstUseEver)
             .build(ui, ||
             {
                 for offset in (memory_current_address .. memory_current_address + 16 * 20).step_by(16)
@@ -196,6 +203,7 @@ fn main()
         Window::new(im_str!("SPU"))
             .position([400.0, 300.0], Condition::FirstUseEver)
             .size([200.0, 0.0], Condition::FirstUseEver)
+            .collapsed(true, Condition::FirstUseEver)
             .build(ui, ||
             {
                 // SPU status
@@ -223,6 +231,7 @@ fn main()
         Window::new(im_str!("GPU"))
             .position([500.0, 300.0], Condition::FirstUseEver)
             .size([400.0, 400.0], Condition::FirstUseEver)
+            .collapsed(true, Condition::FirstUseEver)
             .build(ui, ||
             {
                 // GPU status
@@ -248,15 +257,16 @@ fn main()
                 }
             });
 
-        if !is_running
+        /*if !is_running
         {
             Window::new(im_str!("Pause"))
                 .position([500.0, 0.0], Condition::FirstUseEver)
                 .size([0.0, 0.0], Condition::FirstUseEver)
+                .collapsed(true, Condition::FirstUseEver)
                 .build(ui, ||
                 {
                     ui.text(im_str!("paused"));
                 });
-        }
+        }*/
     });
 }
