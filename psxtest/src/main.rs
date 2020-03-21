@@ -24,7 +24,7 @@ fn main()
 
     p.cpu.debugger.load("debugger.json").expect("cannot load debugger");
 
-    let mut is_running = false;
+    let mut is_running = true;
     let mut new_breakpoint: i32 = 0;
     let mut memory_current_address: i32 = 0;
 

@@ -1,4 +1,5 @@
 use crate::bios::BIOS;
+use crate::cdrom::CDROM;
 use crate::dma::DMA;
 use crate::gpu::GPU;
 use crate::ram::RAM;
@@ -9,6 +10,7 @@ use std::path::Path;
 pub struct Memory
 {
     bios: BIOS,
+    cd: CDROM,
     dma: DMA,
     pub gpu: GPU,
     ram: RAM,
@@ -25,6 +27,7 @@ impl Memory
         Memory
         {
             bios: BIOS::new(bios_path),
+            cd: CDROM::new(),
             dma: DMA::new(),
             gpu: GPU::new(display),
             ram: RAM::new(),
@@ -125,13 +128,16 @@ impl Memory
             0x00000000 ..= 0x1F000000 =>  self.ram.write8(addr, val), // TODO exclusive range
             0x1F802000 ..= 0x1F802042 => info!("Ignored write to Expansion 2"),
             //0x1F801D80 ..= 0x1F801DBC => error!("SPU control registers write8 {:02X} @ {:08X}", val, addr),
+
+            0x1F801800 ..= 0x1F801803 => error!("CDROM write8 {:08X} @ {}", val, addr - 0x1F801800), // CD
+
             0x1F801C00 ..= 0x1F801E80 => self.spu.write8(addr - 0x1F801C00, val),
 
             0x80000000 ..= 0x9F000000 =>  self.ram.write8(addr - 0x80000000, val), // TODO exclusive range
 
             0xA0000000 ..= 0xBF000000 =>  self.ram.write8(addr - 0xA0000000, val), // TODO exclusive range
 
-            _                         => panic!("Unsupported write8 address: {:08x}", addr)
+            _                         => panic!("Unsupported write8 {:08X} @ {:08x}", val, addr)
         }
     }
 

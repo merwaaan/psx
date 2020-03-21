@@ -2,6 +2,7 @@ pub mod psx;
 pub mod opcode;
 
 mod bios;
+mod cdrom;
 mod cpu;
 mod dma;
 mod debugger;

@@ -436,9 +436,9 @@ impl GPU
         let positions =
         [
             Position::from_command(self.gp0_command_buffer[1]),
-            Position::from_command(self.gp0_command_buffer[2]),
             Position::from_command(self.gp0_command_buffer[3]),
-            Position::from_command(self.gp0_command_buffer[4])
+            Position::from_command(self.gp0_command_buffer[5]),
+            Position::from_command(self.gp0_command_buffer[7])
         ];
 
         let colors = [Color(255, 20, 147); 4]; // TEMP FAKE COLOR
