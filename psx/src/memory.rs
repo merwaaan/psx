@@ -1,11 +1,16 @@
+// TODO clean up ranges (in/ex)
+
 use crate::bios::BIOS;
 use crate::cdrom::CDROM;
 use crate::dma::DMA;
 use crate::gpu::GPU;
+use crate::interrupt_controller::InterruptController;
 use crate::ram::RAM;
 use crate::spu::SPU;
 
+use std::cell::RefCell;
 use std::path::Path;
+use std::rc::Rc;
 
 pub struct Memory
 {
@@ -16,43 +21,42 @@ pub struct Memory
     ram: RAM,
     pub spu: SPU,
 
-    interrupt_status: u32,
-    interrupt_mask: u32
+    interrupt_controller: Rc<RefCell<InterruptController>>
 }
 
 impl Memory
 {
-    pub fn new(bios_path: &Path, display: &glium::Display) -> Self
+    pub fn new(bios_path: &Path, display: &glium::Display, interrupt_controller: &Rc<RefCell<InterruptController>>) -> Self
     {
         Memory
         {
             bios: BIOS::new(bios_path),
-            cd: CDROM::new(),
+            cd: CDROM::new(interrupt_controller),
             dma: DMA::new(),
             gpu: GPU::new(display),
             ram: RAM::new(),
             spu: SPU::new(),
-
-            interrupt_status: 0,
-            interrupt_mask: 0
+            interrupt_controller: interrupt_controller.clone()
         }
     }
 
-    pub fn read8(&self, addr: u32) -> u8
+    // TODO mut self because of cd, clean this up?
+    pub fn read8(&mut self, addr: u32) -> u8
     {
         //println!("MEM read8 @ {:08x}", addr);
         // TODO check misaligned access
 
         match addr
         {
-            0x00000000 ..= 0x1EFFFFFF =>  self.ram.read8(addr),
-            0x1F000000 ..= 0x1F800000 => 0xFF, // fake license check
-            0x1F801C00 ..= 0x1F801E80 => self.spu.read8(addr - 0x1F801C00),
+            0x00000000 ..= 0x1EFF_FFFF =>  self.ram.read8(addr),
+            0x1F000000 ..= 0x1F7F_FFFF => 0xFF, // fake license check
+            0x1F801800 ..= 0x1F80_1803 => self.cd.read8(addr - 0x1F801800),
+            0x1F801C00 ..= 0x1F80_1E80 => self.spu.read8(addr - 0x1F801C00),
 
-            0x80000000 ..= 0x9F000000 =>  self.ram.read8(addr - 0x80000000), // TODO exclusive range
-            0xBFC00000 ..= 0xBFC80000 => self.bios.read8(addr - 0xBFC00000), // TODO exclusive range
+            0x80000000 ..= 0x9F00_0000 =>  self.ram.read8(addr - 0x80000000), // TODO exclusive range
+            0xBFC00000 ..= 0xBFC8_0000 => self.bios.read8(addr - 0xBFC00000), // TODO exclusive range
 
-            0xA0000000 ..= 0xA0200000 => self.bios.read8(addr - 0xA0000000), // TODO exclusive range
+            0xA0000000 ..= 0xA020_0000 => self.bios.read8(addr - 0xA0000000), // TODO exclusive range
 
             _ =>
             {
@@ -70,8 +74,9 @@ impl Memory
         match addr
         {
             //0x1F801070 ..= 0x1F801078 => { info!("IRQ read16 @ {:08x}", addr); 0 },
-            0x1F801070 => { error!("Interrupt status read16"); self.interrupt_status as u16 },
-            0x1F801074 => { error!("Interrupt mask read16"); self.interrupt_mask as u16 },
+
+            0x1F801070 => self.interrupt_controller.borrow().read_status(),
+            0x1F801074 => self.interrupt_controller.borrow().read_mask(),
 
             //0x1F801C00 ..= 0x1F802240 => { info!("Unhandled read from the SPU register @ {:08x}", addr); 0 },
             0x1F801C00 ..= 0x1F801E80 => self.spu.read16(addr - 0x1F801C00),
@@ -87,7 +92,7 @@ impl Memory
     }
 
     // TODO rename read32
-    pub fn read(&self, addr: u32) -> u32
+    pub fn read(&mut self, addr: u32) -> u32 // TODO mut because of gpu, how to deal with this?
     {
         //println!("MEM read @ {:08x}", addr);
         // TODO check misaligned access
@@ -129,7 +134,7 @@ impl Memory
             0x1F802000 ..= 0x1F802042 => info!("Ignored write to Expansion 2"),
             //0x1F801D80 ..= 0x1F801DBC => error!("SPU control registers write8 {:02X} @ {:08X}", val, addr),
 
-            0x1F801800 ..= 0x1F801803 => error!("CDROM write8 {:08X} @ {}", val, addr - 0x1F801800), // CD
+            0x1F801800 ..= 0x1F801803 => self.cd.write8(addr - 0x1F801800, val), // CD
 
             0x1F801C00 ..= 0x1F801E80 => self.spu.write8(addr - 0x1F801C00, val),
 
@@ -147,8 +152,8 @@ impl Memory
 
         match addr
         {
-            0x1F801070 => { error!("Interrupt status write16"); self.interrupt_status = val as u32 },
-            0x1F801074 => { error!("Interrupt mask write16"); self.interrupt_mask = val as u32 },
+            0x1F801070 => self.interrupt_controller.borrow_mut().write_status(val),
+            0x1F801074 => self.interrupt_controller.borrow_mut().write_mask(val),
 
             0x1F801100 ..= 0x1F801130 => info!("Ignored write16 to the timer registers: {:08x} @ {:08x}", val, addr),
             //0x1F801C00 ..= 0x1F802240 => info!("Ignored write16 to the SPU register: {:08x} @ {:08x}", val, addr),
@@ -176,8 +181,8 @@ impl Memory
             0x1F801040 ..= 0x1F80105F => info!("Ignoring IO write"),
             0x1F801060 => info!("Ignoring memory control 2 write"),
 
-            0x1F801070 => self.interrupt_status = val,
-            0x1F801074 => self.interrupt_mask = val,
+            0x1F801070 => self.interrupt_controller.borrow_mut().write_status(val as u16),
+            0x1F801074 => self.interrupt_controller.borrow_mut().write_mask(val as u16),
 
             0x1F801080 ..= 0x1F8010FF => self.dma.write(addr - 0x1F801080, val, &mut self.ram, &mut self.gpu),
 

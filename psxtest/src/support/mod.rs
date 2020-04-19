@@ -3,7 +3,7 @@ use glium::glutin;
 use glium::glutin::event::{ Event, WindowEvent };
 use glium::glutin::event_loop::{ ControlFlow, EventLoop };
 use glium::{ Display, Surface };
-use imgui::{ Context, FontConfig, FontGlyphRanges, FontSource, Ui };
+use imgui::{ Context, FontConfig, FontId, FontSource, Ui };
 use imgui_glium_renderer::Renderer;
 use imgui_winit_support::{ HiDpiMode, WinitPlatform };
 use std::time::Instant;
@@ -16,6 +16,9 @@ pub struct System
     pub platform: WinitPlatform,
     pub renderer: Renderer,
     pub font_size: f32,
+
+    pub font_default: FontId,
+    pub font_symbols: FontId
 }
 
 pub fn init(width: u16, height: u16, title: &str) -> System
@@ -46,26 +49,29 @@ pub fn init(width: u16, height: u16, title: &str) -> System
 
     let hidpi_factor = platform.hidpi_factor();
     let font_size = (13.0 * hidpi_factor) as f32;
-    imgui.fonts().add_font(&[
+
+    let font_default = imgui.fonts().add_font(&[
         FontSource::DefaultFontData
         {
             config: Some(FontConfig
             {
                 size_pixels: font_size,
                 ..FontConfig::default()
-            }),
-        },
+            })
+        }
+    ]);
+
+    let font_symbols = imgui.fonts().add_font(&[
         FontSource::TtfData
         {
-            data: include_bytes!("./mplus-1p-regular.ttf"),
+            data: include_bytes!("Inconsolata-Bold.ttf"),
             size_pixels: font_size,
             config: Some(FontConfig
             {
-                rasterizer_multiply: 1.75,
-                glyph_ranges: FontGlyphRanges::japanese(),
+                size_pixels: font_size,
                 ..FontConfig::default()
-            }),
-        },
+            })
+        }
     ]);
 
     imgui.io_mut().font_global_scale = (1.0 / hidpi_factor) as f32;
@@ -80,6 +86,9 @@ pub fn init(width: u16, height: u16, title: &str) -> System
         platform,
         renderer,
         font_size,
+
+        font_default,
+        font_symbols
     }
 }
 

@@ -1,15 +1,21 @@
 use crate::debugger::Debugger;
+use crate::exefile::ExeFile;
+use crate::interrupt_controller::InterruptController;
 use crate::memory::Memory;
 use crate::opcode::Opcode;
 
+use std::cell::RefCell;
 use std::fs::File;
 use std::io::Write;
+use std::path::PathBuf;
+use std::rc::Rc;
 
 // TODO make sure R0 always 0
 
 #[derive(Clone, Debug)]
 enum Exception
 {
+    ExternalInterrupt = 0,
     LoadAddress = 0x4,
     StoreAddress = 0x5,
     Syscall = 0x8,
@@ -22,38 +28,44 @@ enum Exception
 pub struct CPU
 {
     pub pc: u32,
-    next_pc: u32,
+    pub next_pc: u32,
 
     pub r: [u32; 32],
-    r_out: [u32; 32], // To simulate the load-delay slot
+    r_next: [u32; 32], // To simulate the load-delay slot, contains the output of the current instruction
 
     pub hi: u32,
     pub lo: u32,
 
     pending_load: (u32, u32), // (register, value)
+    previous_pending_load: (u32, u32), // to watch for double delayed loads on the same register
 
     status: u32, // TODO all cop registers?
 
     // Exception handling
     current_pc: u32,
-    cause: u32,
-    epc: u32,
+    cop0_cause: u32,
+    cop0_epc: u32,
 
     //
     branching: bool,
     in_delay_slot: bool,
 
     pub counter: u32, // debug helper
+    last : u32,
 
     log_file: File,
     logging: bool,
 
-    pub debugger: Debugger
+    pub debugger: Debugger,
+
+    interrupt_controller: Rc<RefCell<InterruptController>>,
+
+    exe_path: Option<PathBuf>
 }
 
 impl CPU
 {
-    pub fn new() -> Self
+    pub fn new(interrupt_controller: &Rc<RefCell<InterruptController>>, exe_path: Option<PathBuf>) -> Self
     {
         CPU
         {
@@ -61,26 +73,34 @@ impl CPU
             next_pc: 0xBFC00004,
 
             r: [0; 32],
-            r_out: [0; 32],
+            r_next: [0; 32],
             hi: 0,
             lo: 0,
 
             pending_load: (0, 0),
+            previous_pending_load: (0, 0),
+
             status: 0,
 
             current_pc: 0,
-            cause: 0,
-            epc: 0,
+
+            cop0_cause: 0,
+            cop0_epc: 0,
 
             branching: false,
             in_delay_slot: false,
 
             counter: 0,
+            last: 0,
 
             log_file: File::create("custom_log_own.txt").unwrap(),
             logging: false,
 
-            debugger: Debugger::new()
+            debugger: Debugger::new(),
+
+            interrupt_controller: interrupt_controller.clone(),
+
+            exe_path
         }
     }
 
@@ -100,15 +120,33 @@ impl CPU
 
     pub fn step(&mut self, mem: &mut Memory) -> bool
     {
-        // Pending load
+        // Apply any pending load
 
         self.set_reg(self.pending_load.0, self.pending_load.1);
+
+        self.previous_pending_load = self.pending_load;
         self.pending_load = (0, 0);
 
         //
 
         self.in_delay_slot = self.branching;
         self.branching = false;
+
+        //
+
+        if self.update_pending_interrupt()
+        {
+            error!("CPU interrupt!");
+            self.exception(Exception::ExternalInterrupt);
+        }
+
+        //
+
+        if self.pc == 0x8003_0000 && self.exe_path.is_some()
+        {
+            let exe = ExeFile::new_from_file(self.exe_path.take().unwrap());
+            exe.load(self, mem);
+        }
 
         // Fetch the next instruction
 
@@ -125,11 +163,10 @@ impl CPU
         self.pc = self.next_pc;
         self.next_pc = self.pc.wrapping_add(4);
 
-        // CONTINUE: exception not taken @ 19258534 (log exception to file?)
-        //3394000 r13 diff due to SPU capture buffer half flag
+        // A few minor diff in R31
+        //if self.counter >= 2695619+378397+314380-50 && self.counter < 2695619+378397+314380 + 1000000
 
-        if self.counter >= 19600000 && self.counter < 19700000
-        //if self.counter % 10000 == 0
+        if self.counter >= 2695619+378397+314380+1000000+271000-50 && self.counter < 2695619+378397+314380+1000000+271000 + 1000000
         {
             // debug logging
 
@@ -137,7 +174,10 @@ impl CPU
 
             let mut s = String::new();
 
-            s += &format!("{} {:08x} {:08x} ", self.counter, self.current_pc, opcode);
+            //s += &format!("{:08x} {:08x} \n", self.current_pc, opcode);
+            s += &format!("{:08x} {:08x} ", self.current_pc, opcode);
+            //s += &format!("{} {:08x} {:08x} ", self.counter, self.current_pc, opcode);
+
             for i in 0 .. 32
             {
                s += &format!("R{}={:08x} ", i, self.r[i]);
@@ -148,14 +188,25 @@ impl CPU
 
             write!(&mut self.log_file, "{}", s).unwrap();
 
-            for i in 0 .. 32
+            /*for i in 0 .. 32
             {
                 debug!("\tR{} = {:08x}", i, self.r[i]);
-            }
+            }*/
 
 
             self.logging = true;
         }
+
+        /*
+        let value = mem.read(0x801FFD4C);
+        if (value != self.last)
+        {
+          write!(&mut self.log_file, "changes NOW {} {:08X} {:08X}\n", self.counter, self.current_pc, value).unwrap();
+
+          self.last = value;
+        }
+*/
+
         self.counter += 1;
 
         if self.logging
@@ -263,24 +314,52 @@ impl CPU
 
         // Update the registers to account for the load-delay slot
 
-        self.r = self.r_out;
+        self.r = self.r_next;
 
         // Check breakpoints
 
-        let stop = self.debugger.is_breakpoint(self.next_pc);
+        let stop = self.debugger.is_breakpoint(self.next_pc, self) && self.counter >= 2695619;//+378397;
 
         !stop
     }
 
-    fn reg(&self, index: u32) -> u32
+    pub fn reg(&self, index: u32) -> u32
     {
         self.r[index as usize]
     }
 
-    fn set_reg(&mut self, index: u32, value: u32)
+    // Instructions must use this function to set registers so that
+    // load-delay slots are properly emulated.
+    pub fn set_reg(&mut self, index: u32, value: u32)
     {
-        self.r_out[index as usize] = value;
-        self.r_out[0] = 0; // R0 is always zero
+        self.r_next[index as usize] = value;
+        self.r_next[0] = 0; // R0 is always zero
+    }
+
+    // Updates the CAUSE register with the interrupt controller's state.
+    // Returns true if an interrupt is pending.
+    fn update_pending_interrupt(&mut self) -> bool
+    {
+        // Update bit 10 of the CAUSE register to reflect that an interrupt is pending or not
+
+        if self.interrupt_controller.borrow().pending(self.counter % 100000 == 0)
+        {
+            self.cop0_cause |= 1 << 10; // bit 10 = external interrupt
+            //error!("SETTING CAUSE BIT: {:032b}", self.cause);
+        }
+        else
+        {
+            self.cop0_cause &= !(1 << 10);
+        }
+
+        /*if self.counter % 100000 == 0
+        {
+            error!("CAUSE {:032b}", self.cause);
+            error!("STATU {:032b}", self.status);
+        }*/
+
+        (self.status & 1) != 0 && // Interrupt enabled globally
+        (((self.cop0_cause & self.status) >> 8) & 0xFF) != 0 // pending (cause) & mask (status)
     }
 
     fn illegal(&mut self, opcode: &Opcode)
@@ -332,8 +411,8 @@ impl CPU
     {
         trace!("MULT _ R{}={:08x} + R{}={:08x} -> HI/LO", opcode.rs(), self.reg(opcode.rs()), opcode.rt(), self.reg(opcode.rt()));
 
-        let rs = self.reg(opcode.rs()) as i64; // TODO as i32 as i64???
-        let rt = self.reg(opcode.rt()) as i64;
+        let rs = (self.reg(opcode.rs()) as i32) as i64; // "as i64" alone does not sign-extend
+        let rt = (self.reg(opcode.rt()) as i32) as i64;
 
         let mul = (rs * rt) as u64;
 
@@ -515,9 +594,11 @@ impl CPU
 
         let rs = self.reg(opcode.rs()) as i32;
 
+        // Put the return address in register 31 whatever the outcome (+4 to go after the branch-delay slot)
+        self.set_reg(31, self.pc.wrapping_add(4));
+
         if rs >= 0
         {
-            self.set_reg(31, self.pc);
             self.next_pc = self.pc.wrapping_add(opcode.imm_se() << 2);
         }
 
@@ -544,9 +625,11 @@ impl CPU
 
         let rs = self.reg(opcode.rs()) as i32;
 
+        // Put the return address in register 31 whatever the outcome (+4 to go after the branch-delay slot)
+        self.set_reg(31, self.pc.wrapping_add(4));
+
         if rs < 0
         {
-            self.set_reg(31, self.pc);
             self.next_pc = self.pc.wrapping_add(opcode.imm_se() << 2);
         }
 
@@ -559,13 +642,17 @@ impl CPU
 
         let value = match opcode.rd()
         {
+            6 => { error!("COP JUMPDEST READ not implemented"); 0 },
+            7 => { error!("COP DCIC READ not implemented"); 0 },
+            8 => { error!("COP BADADDR READ not implemented"); 0 },
             12 => self.status,
             13 =>
             {
-                write!(&mut self.log_file, "CAUSE READ {} {:08x}\n", self.counter, self.cause).unwrap();
-                self.cause
+                //write!(&mut self.log_file, "CAUSE READ {} {:08x}\n", self.counter, self.cop0_cause).unwrap();
+                self.cop0_cause
             },
-            14 => self.epc,
+            14 => self.cop0_epc,
+            15 => 0x00000002, // Processor ID
             _  => panic!("Unsupported cop0 register: {:08x}", opcode.rd())
         };
 
@@ -585,12 +672,12 @@ impl CPU
 
             13 =>
             {
-                let v = self.reg(opcode.rt());
-                write!(&mut self.log_file, "CAUSE WRITE {} {:08x}\n", self.counter, v).unwrap();
+                //let v = self.reg(opcode.rt());
+                //write!(&mut self.log_file, "CAUSE WRITE {} {:08x}\n", self.counter, v).unwrap();
 
                 // Only SW (9-8) are writeable
                 error!("CAUSE {:08x}", opcode.rd());
-                self.cause = (self.cause & !0x300) | (self.reg(opcode.rt()) & 0x300);
+                self.cop0_cause = (self.cop0_cause & !0x300) | (self.reg(opcode.rt()) & 0x300);
             },
 
             _  => panic!("Unsupported cop0 register: {:08x}", opcode.rd())
@@ -760,8 +847,17 @@ impl CPU
 
         if address % 4 == 0
         {
+            let rt = opcode.rt();
+
+            // TODO for other loads?
+            // Double delayed loads on the same register: cancel the previous load
+            if self.previous_pending_load.0 == rt
+            {
+                self.r_next[rt as usize] = self.r[rt as usize];
+            }
+
             let value = mem.read(address);
-            self.pending_load = (opcode.rt(), value); // in the load-delay slot
+            self.pending_load = (rt, value); // in the load-delay slot
         }
         else
         {
@@ -775,8 +871,8 @@ impl CPU
 
         let address = self.reg(opcode.rs()).wrapping_add(opcode.imm_se());
 
-        // Load-delay slot
-        let value = self.r_out[opcode.rt() as usize];
+        // Bypass the load-delay slot
+        let value = self.r_next[opcode.rt() as usize];
 
         let aligned_value = mem.read(address & !3);
 
@@ -799,7 +895,7 @@ impl CPU
         let address = self.reg(opcode.rs()).wrapping_add(opcode.imm_se());
 
         // Load-delay slot
-        let value = self.r_out[opcode.rt() as usize];
+        let value = self.r_next[opcode.rt() as usize];
 
         let aligned_value = mem.read(address & !3);
 
@@ -975,7 +1071,7 @@ impl CPU
 
         if self.status & 0x10000 != 0
         {
-            error!("Cache is isolated, ignoring");
+            trace!("Cache is isolated, ignoring");
             return;
         }
 
@@ -998,7 +1094,7 @@ impl CPU
 
         if self.status & 0x10000 != 0
         {
-            debug!("Cache is isolated, ignoring");
+            trace!("Cache is isolated, ignoring");
             return;
         }
 
@@ -1083,20 +1179,28 @@ impl CPU
         self.hi = self.reg(opcode.rs());
     }
 
-    fn exception(&mut self, cause: Exception)
+    fn exception(&mut self, exception: Exception)
     {
-        write!(&mut self.log_file, "EXCEPTION {}\n", cause.clone() as i32).unwrap();
+        //write!(&mut self.log_file, "EXCEPTION {}\n", exception.clone() as i32).unwrap();
+        error!("  EXCEPTION {}", exception.clone() as i32);
+        error!("  PC {:08X}", self.pc);
 
-        self.epc = self.current_pc;
-        self.cause = (cause as u32) << 2;
+        self.cop0_epc = self.current_pc;
+
+        // Update the exception's cause in the CAUSE register
+        self.cop0_cause = (self.cop0_cause & !0x7C) | ((exception as u32) << 2);
+
+        // TODO cause
+        // BD if we were in the branch delay slot (31)
+        // CE coprocessor number? (29-28)
 
         // Special case when branching:
         //   - the branch instruction is put in EPC instead of the current one
         //   - bit 31 of CAUSE is set
         if self.in_delay_slot
         {
-            self.epc = self.epc.wrapping_sub(4);
-            self.cause |= 1 << 31;
+            self.cop0_epc = self.cop0_epc.wrapping_sub(4);
+            self.cop0_cause |= 1 << 31;
         }
 
         // Stack the exception
@@ -1105,13 +1209,15 @@ impl CPU
         // Two possible handler addresses depending on the status' BEV bit
         let handler = if (self.status & (1 << 22)) != 0 { 0xBFC00180 } else { 0x80000080 };
 
+        error!("  NPC {:08X}", handler);
+
         self.pc = handler;
         self.next_pc = handler.wrapping_add(4);
     }
 
     fn syscall(&mut self)
     {
-        trace!("SYSCALL");
+        error!("SYSCALL");
 
         self.exception(Exception::Syscall);
     }

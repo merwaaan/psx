@@ -13,7 +13,7 @@ impl BIOS
 {
     pub fn new(path: &Path) -> Self
     {
-        //println!("Loading BIOS: \"{}\"", path.display());
+        println!("Loading BIOS: \"{}\"", path.display());
 
         let mut buffer = Vec::new();
 

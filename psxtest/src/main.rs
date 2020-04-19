@@ -4,7 +4,7 @@ use psx::psx::PSX; // TODO rename to System or something
 
 use imgui::*;
 use std::env;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 mod support;
 
@@ -17,23 +17,29 @@ fn main()
     let args: Vec<String> = env::args().collect();
     if args.len() < 2
     {
-        panic!("Usage: psxtest <bios>");
+        panic!("Usage: psxtest <bios> [game]");
     }
 
-    let mut p = PSX::new(&Path::new(&args[1]), &system.display);
+    let mut program_path = PathBuf::new();
+    if args.len() > 2
+    {
+        program_path.push(args[2].clone());
+    }
+
+    let mut p = PSX::new(&Path::new(&args[1]), program_path, &system.display);
 
     p.cpu.debugger.load("debugger.json").expect("cannot load debugger");
 
     let mut is_running = true;
     let mut new_breakpoint: i32 = 0;
+    let mut new_breakpoint_cond_reg: i32 = 0;
+    let mut new_breakpoint_cond_val: i32 = 0;
     let mut memory_current_address: i32 = 0;
 
     // Build the UI
 
     system.main_loop(p, move |_run, ui, p|
     {
-        //ui.show_demo_window(run);
-
         /*for (key, state) in ui.io().keys_down.iter().enumerate()
         {
             if ui.is_key_released(key as u32)
@@ -68,17 +74,78 @@ fn main()
             {
                 ui.text(format!("Counter: {}", p.cpu.counter));
 
+                let mut need_saving = false;
+
                 for b in p.cpu.debugger.get_breakpoints().to_vec()
                 {
-                    ui.text(format!("0x{:08X}", b));
+
+                    // Breakpoint on/off
+
+                    let mut breakpoint_enabled = b.enabled;
+                    let breakpoint_enabled_changed = ui.checkbox(&ImString::new(format!("##{}", b.address)), &mut breakpoint_enabled);
+
+                    if breakpoint_enabled_changed
+                    {
+                        p.cpu.debugger.toggle_breakpoint(b.address, breakpoint_enabled);
+                        need_saving = true;
+                    }
+
                     ui.same_line(0.0);
 
-                    if ui.small_button(&ImString::new(format!("Remove##{}", b)))
+                    // Address
+
+                    ui.text_colored(
+                        if b.address == p.cpu.pc { COLOR_ACCENT } else { COLOR_DEFAULT },
+                        format!("0x{:08X}", b.address));
+
+                    ui.same_line(0.0);
+
+                    // Remove button
+
+                    if ui.small_button(&ImString::new(format!("Remove##{}", b.address)))
                     {
-                        println!("removing {:08x}", b);
-                        p.cpu.debugger.remove_breakpoint(b);
-                        p.cpu.debugger.save("debugger.json").expect("cannot save debugger");
+                        p.cpu.debugger.remove_breakpoint(b.address);
+                        need_saving = true;
+                        continue;
                     }
+
+                    ui.same_line(0.0);
+
+                    if ui.small_button(&ImString::new(format!("Add register condition##{}", b.address)))
+                    {
+                        p.cpu.debugger.add_breakpoint_condition(b.address);
+                        need_saving = true;
+                    }
+
+                    for bc in p.cpu.debugger.get_breakpoint_conditions_mut(b.address)
+                    {
+                        // TODO combo
+                        new_breakpoint_cond_reg = bc.register as i32;
+                        let reg_changed = ui.input_int(im_str!("R"), &mut new_breakpoint_cond_reg)
+                            .chars_hexadecimal(true)
+                            .chars_uppercase(true)
+                            .build();
+
+                        ui.same_line(0.0);
+
+                        new_breakpoint_cond_val = bc.value as i32;
+                        let val_changed = ui.input_int(im_str!("="), &mut new_breakpoint_cond_val)
+                            .chars_hexadecimal(true)
+                            .chars_uppercase(true)
+                            .build();
+
+                        if reg_changed || val_changed
+                        {
+                            bc.register = new_breakpoint_cond_reg as u8;
+                            bc.value = new_breakpoint_cond_val as u32;
+                            need_saving = true;
+                        }
+                    }
+                }
+
+                if need_saving
+                {
+                    p.cpu.debugger.save("debugger.json").expect("cannot save debugger");
                 }
 
                 ui.separator();
@@ -141,11 +208,17 @@ fn main()
                 for i in 0..10
                 {
                     let pc = p.cpu.pc.wrapping_add(i as u32 * 4);
-                    let disasm = p.cpu.debugger.disassemble(pc, &p.cpu, &p.mem);
+                    let disasm = p.cpu.debugger.disassemble(pc, &p.cpu, &mut p.mem);
 
                     ui.text_colored(
                         if i == 0 { COLOR_ACCENT } else { COLOR_DEFAULT },
                         format!("{:08X}    {:08X}    {}", pc, disasm.bits, disasm.mnemonics));
+
+                    ui.same_line(0.0);
+
+                    //let font_stack = ui.push_font(system.font_symbols);
+                    ui.text_colored(COLOR_DIMMED, disasm.hint);
+                    //font_stack.pop(&ui);
                 }
             });
 

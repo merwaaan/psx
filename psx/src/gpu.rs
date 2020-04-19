@@ -60,7 +60,7 @@ enum DisplayDepth
 #[derive(Debug, Copy, Clone)]
 enum Field
 {
-    Bottom = 0,
+    _Bottom = 0,
     Top = 1
 }
 
@@ -124,6 +124,9 @@ enum GP0Mode
     LoadImage
 }
 
+const VRAM_WIDTH: usize = 1024;
+const VRAM_HEIGHT: usize = 512;
+
 pub struct GPU
 {
     // Status
@@ -175,6 +178,21 @@ pub struct GPU
     gp0_command_method: fn(&mut GPU),
     gp0_words_remaining: u32,
     gp0_mode: GP0Mode,
+
+    // TODO put into struct
+    load_image_start_x: u16,
+    load_image_start_y: u16,
+    load_image_end_x: u16,
+    load_image_end_y: u16,
+    load_image_current_x: u16,
+    load_image_current_y: u16,
+
+    reading_vram: bool,
+
+    vram: Vec<u16>,
+
+    // GPUREAD value
+    read_response: u32,
 
     // Debugging
 
@@ -234,6 +252,18 @@ impl GPU
             gp0_command_method: GPU::gp0_nop,
             gp0_words_remaining: 0,
             gp0_mode: GP0Mode::Command,
+
+            load_image_start_x: 0,
+            load_image_start_y: 0,
+            load_image_end_x: 0,
+            load_image_end_y: 0,
+            load_image_current_x: 0,
+            load_image_current_y: 0,
+
+            vram: vec![0; VRAM_WIDTH * VRAM_HEIGHT],
+            reading_vram: false,
+
+            read_response: 0,
 
             renderer: Renderer::new(display)
         }
@@ -338,15 +368,30 @@ impl GPU
         self.texture_page_base_x as u32
     }
 
-    pub fn read(&self) -> u32
+    pub fn read(&mut self) -> u32 // TODO how to avoid mut? interior mutab?
     {
-        0
+        if self.reading_vram
+        {
+            let a = self.read_vram_pixel();
+            let b = self.read_vram_pixel();
+
+            self.read_response =
+                (b as u32) << 16 |
+                a as u32;
+
+            if self.load_image_current_y == self.load_image_end_y
+            {
+                self.reading_vram = false;
+            }
+        }
+
+        self.read_response
     }
 
     pub fn gp0(&mut self, command: u32)
     {
         // No command being buffered, we start a new one
-
+        error!("GP0 {:08X}", command);
         if self.gp0_words_remaining == 0
         {
             let opcode = command >> 24;
@@ -396,7 +441,11 @@ impl GPU
 
             GP0Mode::LoadImage =>
             {
-                // TODO LOAD
+                error!("load image {}", self.gp0_words_remaining);
+
+                self.write_vram_pixel((command & 0xFFFF) as u16);
+                self.write_vram_pixel((command >> 16) as u16);
+                // TODO take masking into account
 
                 if self.gp0_words_remaining == 0
                 {
@@ -404,6 +453,38 @@ impl GPU
                 }
             }
         }
+    }
+
+    fn write_vram_pixel(&mut self, value: u16)
+    {
+        error!("write to VRAM {:08X} @ {:08X} {:08X}", value, self.load_image_current_x, self.load_image_current_y);
+
+        self.vram[self.load_image_current_y as usize * VRAM_WIDTH + self.load_image_current_x as usize] = value;
+
+        // TODO wrap?
+        self.load_image_current_x += 1;
+        if self.load_image_current_x == self.load_image_end_x
+        {
+            self.load_image_current_x = self.load_image_start_x;
+            self.load_image_current_y += 1;
+        }
+    }
+
+    fn read_vram_pixel(&mut self) -> u16
+    {
+        let value = self.vram[self.load_image_current_y as usize * VRAM_WIDTH + self.load_image_current_x as usize];
+
+        error!("read from VRAM {:08X} @ {:08X} {:08X}", value, self.load_image_current_x, self.load_image_current_y);
+
+        // TODO wrap?
+        self.load_image_current_x += 1;
+        if self.load_image_current_x == self.load_image_end_x
+        {
+            self.load_image_current_x = self.load_image_start_x;
+            self.load_image_current_y += 1;
+        }
+
+        value
     }
 
     // GP0
@@ -489,25 +570,42 @@ impl GPU
     fn gp0_load_image(&mut self)
     {
         let resolution = self.gp0_command_buffer[2];
-        let width = resolution & 0xFFFF;
-        let height = resolution >> 16;
+        let width = (resolution & 0xFFFF) as u16;
+        let height = (resolution >> 16) as u16;
 
-        let image_size = width * height;
+        let image_size = width as u32 * height as u32;
+        let image_size = (image_size + 1) & !1; // Handle odd pixel counts
 
         self.gp0_words_remaining = image_size / 2;
-        self.gp0_mode = GP0Mode::LoadImage;
 
-        // Handle even pixel counts.
-        // Since we read two pixels for each byte, we might need another word for the last pixel.
-        if image_size % 2 == 1
-        {
-            self.gp0_words_remaining += 1;
-        }
+        self.load_image_start_x = (self.gp0_command_buffer[1] & 0xFFFF) as u16;
+        self.load_image_start_y = (self.gp0_command_buffer[1] >> 16) as u16;
+        self.load_image_end_x = self.load_image_start_x + width; // TODO wrap/cap?
+        self.load_image_end_y = self.load_image_start_y + height;
+
+        self.load_image_current_x = self.load_image_start_x;
+        self.load_image_current_y = self.load_image_start_y;
+
+        error!("load image command {} {} {} {:08X} {:08X}", width, height, self.gp0_words_remaining, self.load_image_start_x, self.load_image_start_y);
+        self.gp0_mode = GP0Mode::LoadImage;
     }
 
     fn gp0_store_image(&mut self)
     {
-        error!("unsupported GP0 store image");
+        let resolution = self.gp0_command_buffer[2];
+        let width = (resolution & 0xFFFF) as u16;
+        let height = (resolution >> 16) as u16;
+
+        self.load_image_start_x = (self.gp0_command_buffer[1] & 0xFFFF) as u16;
+        self.load_image_start_y = (self.gp0_command_buffer[1] >> 16) as u16;
+        self.load_image_end_x = self.load_image_start_x + width; // TODO wrap/cap?
+        self.load_image_end_y = self.load_image_start_y + height;
+
+        self.load_image_current_x = self.load_image_start_x;
+        self.load_image_current_y = self.load_image_start_y;
+
+        error!("store image command {} {} {:08X} {:08X}", width, height, self.load_image_start_x, self.load_image_start_y);
+        self.reading_vram = true;
     }
 
     fn gp0_draw_mode(&mut self)
@@ -600,6 +698,7 @@ impl GPU
             0x06 => self.gp1_display_horizontal_range(command),
             0x07 => self.gp1_display_vertical_range(command),
             0x08 => self.gp1_display_mode(command),
+            0x10 ..= 0x1F => self.gp1_get_gpu_info(command),
 
             _ => panic!("unsupported GP1 opcode {:0X}", opcode)
         }
@@ -611,7 +710,7 @@ impl GPU
     {
         self.dma_direction = DMADirection::Off;
         self.irq = false;
-        self.display_disable = false;
+        self.display_disable = true;
         self.interlace = false;
         self.display_depth = DisplayDepth::Bits15;
         self.video_mode = VideoMode::NTSC;
@@ -647,6 +746,8 @@ impl GPU
         self.display_horizontal_start = 0;
         self.display_vertical_end = 0;
         self.display_vertical_start = 0;
+
+        self.read_response = 0;
 
         self.gp1_reset_command_buffer(value);
     }
@@ -704,8 +805,8 @@ impl GPU
 
         self.display_depth = match (value & 0x10) != 0
         {
-            true => DisplayDepth::Bits15,
-            false => DisplayDepth::Bits24
+            false => DisplayDepth::Bits15,
+            true => DisplayDepth::Bits24
         };
 
         self.video_mode = match (value & 8) != 0
@@ -726,6 +827,49 @@ impl GPU
         if (value & 0x80) != 0
         {
             panic!("weird reverse flag!");
+        }
+    }
+
+    fn gp1_get_gpu_info(&mut self, value: u32)
+    {
+        error!("GetGPUInfo {:08X}", value);
+
+        // Only the first 3 bits are meaningful
+        self.read_response = match value & 7
+        {
+            // Texture window
+            2 =>
+            {
+                (self.texture_window_mask_x as u32) |
+                (self.texture_window_mask_y as u32) << 5 |
+                (self.texture_window_offset_x as u32) << 10 |
+                (self.texture_window_offset_y as u32) << 15
+            }
+
+            // Draw area top left
+            3 =>
+            {
+                (self.drawing_area_left as u32) |
+                (self.drawing_area_top as u32) << 10
+            }
+
+            // Draw area bottom right
+            4 =>
+            {
+                (self.drawing_area_right as u32) |
+                (self.drawing_area_bottom as u32) << 10
+            }
+
+            // Draw offset
+            5 =>
+            {
+                // Mask the value as we performed sign extension when writing the value
+                ((self.drawing_offset_x & 0x7FF) as u32) |
+                ((self.drawing_offset_y & 0x7FF) as u32 )<< 11
+
+            }
+
+            _ => self.read_response
         }
     }
 }
