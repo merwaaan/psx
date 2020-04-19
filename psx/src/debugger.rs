@@ -272,7 +272,7 @@ impl Debugger
 
         if template.contains("$regoffset")
         {
-            let target = opcode.imm().wrapping_add(cpu.reg(opcode.rs()));
+            let target = opcode.imm_se().wrapping_add(cpu.reg(opcode.rs()));
             hint.push_str(&format!("{:08X} ", target));
         }
 

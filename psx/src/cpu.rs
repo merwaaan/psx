@@ -155,7 +155,7 @@ impl CPU
         if self.current_pc % 4 != 0
         {
             self.exception(Exception::LoadAddress);
-            return false;
+            return true;
         }
 
         let opcode = Opcode(mem.read(self.pc));
@@ -166,8 +166,12 @@ impl CPU
         // A few minor diff in R31
         //if self.counter >= 2695619+378397+314380-50 && self.counter < 2695619+378397+314380 + 1000000
 
-        if self.counter >= 2695619+378397+314380+1000000+271000-50 && self.counter < 2695619+378397+314380+1000000+271000 + 1000000
+        let debug_addr = 2695619+378397+314380+1000000+271000+454620;
+        let mut debug = false;
+        if self.counter >= debug_addr && self.counter < debug_addr + 100000
         {
+            debug = true;
+
             // debug logging
 
             //write!(&mut self.log_file, "{} {:08x} {:08x} \n", self.counter, self.current_pc, opcode).unwrap();
@@ -318,7 +322,7 @@ impl CPU
 
         // Check breakpoints
 
-        let stop = self.debugger.is_breakpoint(self.next_pc, self) && self.counter >= 2695619;//+378397;
+        let stop = self.debugger.is_breakpoint(self.next_pc, self) && debug;//+378397;
 
         !stop
     }

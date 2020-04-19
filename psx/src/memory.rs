@@ -6,6 +6,7 @@ use crate::dma::DMA;
 use crate::gpu::GPU;
 use crate::interrupt_controller::InterruptController;
 use crate::ram::RAM;
+use crate::scratchpad::Scratchpad;
 use crate::spu::SPU;
 
 use std::cell::RefCell;
@@ -19,6 +20,7 @@ pub struct Memory
     dma: DMA,
     pub gpu: GPU,
     ram: RAM,
+    scratchpad: Scratchpad,
     pub spu: SPU,
 
     interrupt_controller: Rc<RefCell<InterruptController>>
@@ -35,6 +37,7 @@ impl Memory
             dma: DMA::new(),
             gpu: GPU::new(display),
             ram: RAM::new(),
+            scratchpad: Scratchpad::new(),
             spu: SPU::new(),
             interrupt_controller: interrupt_controller.clone()
         }
@@ -50,6 +53,7 @@ impl Memory
         {
             0x00000000 ..= 0x1EFF_FFFF =>  self.ram.read8(addr),
             0x1F000000 ..= 0x1F7F_FFFF => 0xFF, // fake license check
+            0x1F80_0000 ..= 0x1F80_03FF => self.scratchpad.read8(addr - 0x1F80_0000),
             0x1F801800 ..= 0x1F80_1803 => self.cd.read8(addr - 0x1F801800),
             0x1F801C00 ..= 0x1F80_1E80 => self.spu.read8(addr - 0x1F801C00),
 
@@ -73,6 +77,7 @@ impl Memory
 
         match addr
         {
+            0x1F80_0000 ..= 0x1F80_03FF => self.scratchpad.read16(addr - 0x1F80_0000),
             //0x1F801070 ..= 0x1F801078 => { info!("IRQ read16 @ {:08x}", addr); 0 },
 
             0x1F801070 => self.interrupt_controller.borrow().read_status(),
@@ -100,6 +105,7 @@ impl Memory
         match addr
         {
             0x00000000 ..= 0x1F000000 =>  self.ram.read32(addr), // TODO exclusive range
+            0x1F80_0000 ..= 0x1F80_03FF => self.scratchpad.read32(addr - 0x1F80_0000),
             0x1F801000 ..= 0x1F801078 => 0,
 
             0x1F801080 ..= 0x1F8010FF => self.dma.read(addr - 0x1F801080),
@@ -131,6 +137,7 @@ impl Memory
         match addr
         {
             0x00000000 ..= 0x1F000000 =>  self.ram.write8(addr, val), // TODO exclusive range
+            0x1F80_0000 ..= 0x1F80_03FF => self.scratchpad.write8(addr - 0x1F80_0000, val),
             0x1F802000 ..= 0x1F802042 => info!("Ignored write to Expansion 2"),
             //0x1F801D80 ..= 0x1F801DBC => error!("SPU control registers write8 {:02X} @ {:08X}", val, addr),
 
@@ -152,6 +159,7 @@ impl Memory
 
         match addr
         {
+            0x1F80_0000 ..= 0x1F80_03FF => self.scratchpad.write16(addr - 0x1F80_0000, val),
             0x1F801070 => self.interrupt_controller.borrow_mut().write_status(val),
             0x1F801074 => self.interrupt_controller.borrow_mut().write_mask(val),
 
@@ -176,6 +184,7 @@ impl Memory
         match addr
         {
             0x00000000 ..= 0x1F000000 =>  self.ram.write32(addr, val), // TODO exclusive range
+            0x1F80_0000 ..= 0x1F80_03FF => self.scratchpad.write32(addr - 0x1F80_0000, val),
 
             0x1F801000 ..= 0x1F801024 => info!("Ignoring memory control 1 write"),
             0x1F801040 ..= 0x1F80105F => info!("Ignoring IO write"),

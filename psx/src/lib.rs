@@ -12,6 +12,7 @@ mod interrupt_controller;
 mod memory;
 mod ram;
 mod renderer;
+mod scratchpad;
 mod spu;
 
 #[macro_use]
