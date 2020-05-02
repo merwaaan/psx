@@ -43,6 +43,27 @@ impl Breakpoint
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DataBreakpoint
+{
+    pub address: u32,
+    pub on_write: bool,
+    pub on_read: bool
+}
+
+impl DataBreakpoint
+{
+    pub fn new(address: u32) -> Self
+    {
+        DataBreakpoint
+        {
+            address,
+            on_write: true,
+            on_read: true
+        }
+    }
+}
+
 pub struct Disassembly
 {
     // Raw bits
@@ -58,7 +79,12 @@ pub struct Disassembly
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Debugger
 {
-    breakpoints: Vec<Breakpoint>
+    breakpoints: Vec<Breakpoint>,
+    data_breakpoints: Vec<DataBreakpoint>,
+
+    // Data breakpoints hit since the latest check
+    #[serde(skip)]
+    data_breakpoints_hit: Vec<u32>
 }
 
 impl Debugger
@@ -67,7 +93,9 @@ impl Debugger
     {
         Debugger
         {
-            breakpoints: Vec::new()
+            breakpoints: Vec::new(),
+            data_breakpoints: Vec::new(),
+            data_breakpoints_hit: Vec::new()
         }
     }
 
@@ -91,6 +119,7 @@ impl Debugger
         let deserialized: Debugger = serde_json::from_str(&serialized)?;
 
         self.breakpoints = deserialized.breakpoints;
+        self.data_breakpoints = deserialized.data_breakpoints;
 
         Ok(())
     }
@@ -165,6 +194,54 @@ impl Debugger
         self.breakpoints.as_slice()
     }
 
+    // Data breakpoints
+
+    pub fn add_data_breakpoint(&mut self, address: u32)
+    {
+        if !self.data_breakpoints.iter().any(|b| b.address == address)
+        {
+            self.data_breakpoints.push(DataBreakpoint::new(address));
+        }
+    }
+
+    pub fn remove_data_breakpoint(&mut self, address: u32)
+    {
+        self.data_breakpoints.retain(|b| b.address != address);
+    }
+
+    pub fn get_data_breakpoints_mut(&mut self) -> &mut[DataBreakpoint]
+    {
+        &mut self.data_breakpoints
+    }
+
+    pub fn get_data_breakpoints_hit(&self) -> &[u32]
+    {
+        &self.data_breakpoints_hit
+    }
+
+    pub fn register_data_access(&mut self, address: u32, read: bool)
+    {
+        if self.data_breakpoints.iter().any(|b| b.address == address && ((read && b.on_read) || (!read && b.on_write)))
+        {
+            self.data_breakpoints_hit.push(address);
+        }
+    }
+
+    pub fn clear_data_access(&mut self)
+    {
+        self.data_breakpoints_hit.clear();
+    }
+
+    pub fn has_data_breakpoint(&self) -> bool
+    {
+        !self.data_breakpoints_hit.is_empty()
+    }
+
+    pub fn is_data_breakpoint(&self, address: u32) -> bool
+    {
+        self.data_breakpoints_hit.iter().any(|a| *a == address)
+    }
+
     // Disassembly
 
     pub fn disassemble(&self, pc: u32, cpu: &CPU, mem: &mut Memory) -> Disassembly
@@ -178,9 +255,9 @@ impl Debugger
             {
                 match opcode.sub()
                 {
-                    0b000000 => "SLL $rd, $rs, $shift",
-                    0b000010 => "SRL $rd, $rs, $shift",
-                    0b000011 => "SRA $rd, $rs, $shift",
+                    0b000000 => "SLL $rd, $rt, $shift",
+                    0b000010 => "SRL $rd, $rt, $shift",
+                    0b000011 => "SRA $rd, $rt, $shift",
                     0b000100 => "SLLV $rd, $rt, $rs",
                     0b000111 => "SRAV $rd, $rt, $rs",
                     0b001000 => "JR $rs",
@@ -205,18 +282,18 @@ impl Debugger
                     0b100111 => "NOR $rd, $rs, $rt",
                     0b101010 => "SLT $rd, $rs, $rt",
                     0b101011 => "SLTU $rd, $rs, $rt",
-                    _        => "UNKNOWN"
+                    _        => "[UNKNOWN]"
                 }
             },
             0b000001 =>
             {
-                match opcode.rt()
+                match opcode.rt() & 0b10001
                 {
                     0b00000 => "BLTZ $rs, $jumpoffset",
                     0b00001 => "BGEZ $rs, $jumpoffset",
                     0b10000 => "BLTZAL $rs, $jumpoffset",
                     0b10001 => "BGEZAL $rs, $jumpoffset",
-                    _       => "UNKNOWN"
+                    _       => "[UNKNOWN]"
                 }
             },
             0b000010 => "J $target",
@@ -240,7 +317,7 @@ impl Debugger
                     0b00000 => "MFC $rt, cop$rd",
                     0b00100 => "MTC $rt, cop$rd",
                     0b10000 => "RFE",
-                    _       => "UNKNOWN"
+                    _       => "[UNKNOWN]"
                 }
             },
             0b100000 => "LB $rt, $regoffset",
@@ -263,7 +340,7 @@ impl Debugger
             0b111001 => "SCW1",
             0b111010 => "SCW2",
             0b111011 => "SCW3",
-            _        => "UNKNOWN"
+            _        => "[UNKNOWN]"
         };
 
         // Expand hints
@@ -273,7 +350,7 @@ impl Debugger
         if template.contains("$regoffset")
         {
             let target = opcode.imm_se().wrapping_add(cpu.reg(opcode.rs()));
-            hint.push_str(&format!("{:08X} ", target));
+            hint.push_str(&format!("{:08X}", target));
         }
 
         if template.contains("$jumpoffset")

@@ -28,18 +28,25 @@ fn main()
 
     let mut p = PSX::new(&Path::new(&args[1]), program_path, &system.display);
 
-    p.cpu.debugger.load("debugger.json").expect("cannot load debugger");
+    match p.cpu.debugger.load("debugger.json")
+    {
+        Ok(_) => (),
+        Err(error) => println!("cannot load debugger from file {:?}", error)
+    }
 
     let mut is_running = true;
     let mut new_breakpoint: i32 = 0;
     let mut new_breakpoint_cond_reg: i32 = 0;
     let mut new_breakpoint_cond_val: i32 = 0;
+    let mut new_data_breakpoint: i32 = 0;
     let mut memory_current_address: i32 = 0;
 
     // Build the UI
 
     system.main_loop(p, move |_run, ui, p|
     {
+        //let mut op = true; ui.show_demo_window(&mut op);
+
         /*for (key, state) in ui.io().keys_down.iter().enumerate()
         {
             if ui.is_key_released(key as u32)
@@ -72,13 +79,16 @@ fn main()
             .collapsed(true, Condition::FirstUseEver)
             .build(ui, ||
             {
+                let mut need_saving = false;
+
                 ui.text(format!("Counter: {}", p.cpu.counter));
 
-                let mut need_saving = false;
+                // Code breakpoints
+
+                ui.separator();
 
                 for b in p.cpu.debugger.get_breakpoints().to_vec()
                 {
-
                     // Breakpoint on/off
 
                     let mut breakpoint_enabled = b.enabled;
@@ -122,8 +132,6 @@ fn main()
                         // TODO combo
                         new_breakpoint_cond_reg = bc.register as i32;
                         let reg_changed = ui.input_int(im_str!("R"), &mut new_breakpoint_cond_reg)
-                            .chars_hexadecimal(true)
-                            .chars_uppercase(true)
                             .build();
 
                         ui.same_line(0.0);
@@ -143,13 +151,6 @@ fn main()
                     }
                 }
 
-                if need_saving
-                {
-                    p.cpu.debugger.save("debugger.json").expect("cannot save debugger");
-                }
-
-                ui.separator();
-
                 ui.input_int(im_str!(""), &mut new_breakpoint)
                     .chars_hexadecimal(true)
                     .chars_uppercase(true)
@@ -160,6 +161,77 @@ fn main()
                 if ui.small_button(im_str!("Add"))
                 {
                     p.cpu.debugger.add_breakpoint(new_breakpoint as u32);
+                    need_saving = true;
+                }
+
+                ui.separator();
+
+                // Data breakpoints
+
+                let mut data_breakpoint_to_remove = None;
+
+                let breakpoints_hit = p.cpu.debugger.get_data_breakpoints_hit().to_vec();
+
+                for b in p.cpu.debugger.get_data_breakpoints_mut()
+                {
+                    // On read / On write
+
+                    let mut on_read = b.on_read;
+                    if ui.checkbox(&ImString::new(format!("R##r{}", b.address)), &mut on_read)
+                    {
+                        b.on_read = on_read;
+                        need_saving = true;
+                    }
+
+                    ui.same_line(0.0);
+
+                    let mut on_write = b.on_write;
+                    if ui.checkbox(&ImString::new(format!("W##w{}", b.address)), &mut on_write)
+                    {
+                        b.on_write = on_write;
+                        need_saving = true;
+                    }
+
+                    ui.same_line(0.0);
+
+                    // Address
+
+                    // TODO
+                    ui.text_colored(
+                        if breakpoints_hit.iter().any(|a| *a == b.address) { COLOR_ACCENT } else { COLOR_DEFAULT },
+                        format!("0x{:08X}", b.address));
+
+                    ui.same_line(0.0);
+
+                    // Remove button
+
+                    if ui.small_button(&ImString::new(format!("Remove##data{}", b.address)))
+                    {
+                        data_breakpoint_to_remove = Some(b.address);
+                    }
+                }
+
+                if data_breakpoint_to_remove.is_some()
+                {
+                    p.cpu.debugger.remove_data_breakpoint(data_breakpoint_to_remove.unwrap());
+                    need_saving = true;
+                }
+
+                ui.input_int(im_str!("##data"), &mut new_data_breakpoint)
+                    .chars_hexadecimal(true)
+                    .chars_uppercase(true)
+                    .build();
+
+                ui.same_line(0.0);
+
+                if ui.small_button(im_str!("Add##data"))
+                {
+                    p.cpu.debugger.add_data_breakpoint(new_data_breakpoint as u32);
+                    need_saving = true;
+                }
+
+                if need_saving
+                {
                     p.cpu.debugger.save("debugger.json").expect("cannot save debugger");
                 }
             });
@@ -200,12 +272,12 @@ fn main()
         const COLOR_DEFAULT: [f32; 4]  = [1.0, 1.0, 1.0, 1.0];
 
         Window::new(im_str!("Instructions"))
-            .position([0.0, 400.0], Condition::FirstUseEver)
+            .position([0.0, 700.0], Condition::FirstUseEver)
             .size([0.0, 0.0], Condition::FirstUseEver)
             .collapsed(true, Condition::FirstUseEver)
             .build(ui, ||
             {
-                for i in 0..10
+                for i in -10 .. 10
                 {
                     let pc = p.cpu.pc.wrapping_add(i as u32 * 4);
                     let disasm = p.cpu.debugger.disassemble(pc, &p.cpu, &mut p.mem);
@@ -217,8 +289,17 @@ fn main()
                     ui.same_line(0.0);
 
                     //let font_stack = ui.push_font(system.font_symbols);
-                    ui.text_colored(COLOR_DIMMED, disasm.hint);
+                    ui.text_colored(COLOR_DIMMED, &disasm.hint);
                     //font_stack.pop(&ui);
+
+                    if ui.is_item_clicked(MouseButton::Left)
+                    {
+                        match u32::from_str_radix(&disasm.hint, 16)
+                        {
+                            Ok(target) => memory_current_address = target as i32,
+                            _ => println!("cannot convert hex \"{}\" to u32", &disasm.hint)
+                        }
+                    }
                 }
             });
 
@@ -228,6 +309,33 @@ fn main()
             .collapsed(true, Condition::FirstUseEver)
             .build(ui, ||
             {
+                // Header row
+
+                ui.text("         ");
+                ui.same_line_with_spacing(0.0, 15.0);
+
+                for i in 0 .. 16
+                {
+                    ui.text_colored(COLOR_DIMMED, format!("{:02X}", i));
+
+                    let spacing = match i
+                    {
+                        7  => 10.0, // middle of row
+                        15 => 15.0, // end of row,
+                        _  => 5.0
+                    };
+
+                    if i != 15
+                    {
+                        ui.same_line_with_spacing(0.0, spacing);
+                    }
+                }
+
+                // Memory
+
+                // Make sure the starting address is always aligned on 16
+                memory_current_address -= (memory_current_address as u32 % 16) as i32;
+
                 for offset in (memory_current_address .. memory_current_address + 16 * 20).step_by(16)
                 {
                     ui.text(format!("{:08X}:", offset));
@@ -241,7 +349,19 @@ fn main()
                             if value == 0 { COLOR_DIMMED } else { COLOR_DEFAULT },
                             format!("{:02X}", value));
 
-                        ui.same_line_with_spacing(0.0, if i != 15 { 5.0 } else { 15.0 });
+                        if ui.is_item_hovered()
+                        {
+                            ui.tooltip_text(format!("{:08X}", offset + i as i32));
+                        }
+
+                        let spacing = match i
+                        {
+                            7  => 10.0, // middle of row
+                            15 => 15.0, // end of row,
+                            _  => 5.0
+                        };
+
+                        ui.same_line_with_spacing(0.0, spacing);
                     }
 
                     for i in 0 .. 16
@@ -266,9 +386,6 @@ fn main()
                     .chars_hexadecimal(true)
                     .chars_uppercase(true)
                     .build();
-
-                // Make sure the starting address is always aligned on 16
-                memory_current_address -= memory_current_address % 16;
 
                 ui.same_line(0.0);
             });
@@ -316,17 +433,22 @@ fn main()
                 ui.text(im_str!("Commands"));
 
                 ui.columns(3, im_str!(""), false);
+                ui.set_column_width(0, 40.0);
+                ui.set_column_width(1, 100.0);
 
+                let mut i = 0;
                 for command in p.gpu().previous_commands.iter()
                 {
-                    ui.text(format!("GP{}", command.0 as u8));
+                    ui.text(format!("{} GP{}", i, command.0 as u8));
                     ui.next_column();
 
-                    ui.text(format!("{:08X}", command.1));
+                    ui.text(format!("{:08X}", command.1[0]));
                     ui.next_column();
 
                     ui.text(format!("{}", p.gpu().disassemble(command)));
                     ui.next_column();
+
+                    i += 1;
                 }
             });
 

@@ -76,3 +76,12 @@ impl fmt::LowerHex for Opcode
         fmt::LowerHex::fmt(&bits, f)
     }
 }
+
+impl fmt::UpperHex for Opcode
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result
+    {
+        let Opcode(bits) = self;
+        fmt::UpperHex::fmt(&bits, f)
+    }
+}

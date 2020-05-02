@@ -78,6 +78,9 @@ impl Memory
         match addr
         {
             0x1F80_0000 ..= 0x1F80_03FF => self.scratchpad.read16(addr - 0x1F80_0000),
+
+            0x1F80_1040 ..= 0x1F80_105F => { /*warn!("IO read16 not implemented");*/ 0xFFFF },
+
             //0x1F801070 ..= 0x1F801078 => { info!("IRQ read16 @ {:08x}", addr); 0 },
 
             0x1F801070 => self.interrupt_controller.borrow().read_status(),
@@ -138,6 +141,8 @@ impl Memory
         {
             0x00000000 ..= 0x1F000000 =>  self.ram.write8(addr, val), // TODO exclusive range
             0x1F80_0000 ..= 0x1F80_03FF => self.scratchpad.write8(addr - 0x1F80_0000, val),
+
+            0x1F80_1040 ..= 0x1F80_105F => warn!("IO write8 not implemented"),
             0x1F802000 ..= 0x1F802042 => info!("Ignored write to Expansion 2"),
             //0x1F801D80 ..= 0x1F801DBC => error!("SPU control registers write8 {:02X} @ {:08X}", val, addr),
 
@@ -160,6 +165,9 @@ impl Memory
         match addr
         {
             0x1F80_0000 ..= 0x1F80_03FF => self.scratchpad.write16(addr - 0x1F80_0000, val),
+
+            0x1F80_1040 ..= 0x1F80_105F => warn!("IO write16 not implemented"),
+
             0x1F801070 => self.interrupt_controller.borrow_mut().write_status(val),
             0x1F801074 => self.interrupt_controller.borrow_mut().write_mask(val),
 

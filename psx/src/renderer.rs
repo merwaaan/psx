@@ -1,4 +1,7 @@
-use glium::*;
+use glium::*; // TODO clean up
+use glium::backend::Facade;
+
+use std::rc::Rc;
 
 #[derive(Debug, Copy, Clone)]
 pub struct Position(pub i16, pub i16);
@@ -24,14 +27,15 @@ impl Color
 
 pub struct Renderer
 {
-    // Shaders
+    context: Rc<glium::backend::Context>,
+    render_buffer: glium::framebuffer::RenderBuffer,
     program: glium::Program,
 
     vertex_buffer: glium::VertexBuffer<Vertex>,
-    triangle_index: usize
+    vertex_index: usize
 }
 
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 struct Vertex
 {
     position: [i16; 2],
@@ -40,39 +44,70 @@ struct Vertex
 
 implement_vertex!(Vertex, position, color);
 
-const MAX_BUFFER_SIZE: usize = 1000;
+const MAX_BUFFER_SIZE: usize = 5_000_000;
 
 impl Renderer
 {
     pub fn new(display: &glium::Display) -> Renderer
     {
+        let render_buffer = glium::framebuffer::RenderBuffer::new(
+            display,
+            glium::texture::UncompressedFloatFormat::F32F32F32,
+            1024,
+            512).unwrap();
+
         let program = glium::Program::from_source(display, VERTEX_SHADER_SOURCE, FRAGMENT_SHADER_SOURCE, None).unwrap();
 
         let vertex_buffer = glium::VertexBuffer::empty_dynamic(display, MAX_BUFFER_SIZE).unwrap();
 
         Renderer
         {
-            program: program,
+            context: display.get_context().clone(),
 
-            vertex_buffer: vertex_buffer,
-            triangle_index: 0
+            render_buffer,
+            program,
+
+            vertex_buffer,
+            vertex_index: 0
         }
     }
 
     pub fn render(&mut self, target: &mut glium::Frame)
     {
+        // Draw to the render buffer
+
+        let mut framebuffer = glium::framebuffer::SimpleFrameBuffer::new(&self.context, &self.render_buffer).unwrap();
+
         let index_buffer = glium::index::NoIndices(glium::index::PrimitiveType::TrianglesList);
 
-        target.draw(&self.vertex_buffer, &index_buffer, &self.program, &glium::uniforms::EmptyUniforms, &Default::default()).unwrap();
+        framebuffer.draw(&self.vertex_buffer, &index_buffer, &self.program, &glium::uniforms::EmptyUniforms, &Default::default()).unwrap();
 
-        self.triangle_index = 0;
+        // Blit the render texture to the target texture
+
+        let source_rect = glium::Rect { left: 0, bottom: 0, width: 1024, height: 512 };
+        let target_rect = glium::BlitTarget { left: 0, bottom: 0, width: 1600, height: 800 }; // TODO for now = same size as window, clean this up
+
+        //framebuffer.blit_whole_color_to(target, &target_rect, uniforms::MagnifySamplerFilter::Linear);
+        framebuffer.blit_color(&source_rect, target, &target_rect, uniforms::MagnifySamplerFilter::Linear);
+
+        // Reset the vertex buffer's content
+
+        let dummy_vertex = Vertex { position: [0, 0], color: [0, 0, 0] };
+
+        let mut w = self.vertex_buffer.map_write();
+        for i in 0 .. self.vertex_index
+        {
+            w.set(i, dummy_vertex);
+        }
+
+        self.vertex_index = 0;
     }
 
     pub fn push_triangle(&mut self, positions: [Position; 3], colors: [Color; 3])
     {
-        if self.triangle_index + 3 > MAX_BUFFER_SIZE
+        if self.vertex_index + 3 > MAX_BUFFER_SIZE
         {
-            error!("Vertex buffer full, ignoring triangle");
+            warn!("Vertex buffer full, ignoring triangle");
             return;
         }
 
@@ -81,18 +116,18 @@ impl Renderer
         let vertex3 = Vertex { position: [positions[2].0, positions[2].1], color: [colors[2].0, colors[2].1, colors[2].2] };
 
         let mut w = self.vertex_buffer.map_write();
-        w.set(self.triangle_index, vertex1);
-        w.set(self.triangle_index + 1, vertex2);
-        w.set(self.triangle_index + 2, vertex3);
+        w.set(self.vertex_index, vertex1);
+        w.set(self.vertex_index + 1, vertex2);
+        w.set(self.vertex_index + 2, vertex3);
 
-        self.triangle_index += 3;
+        self.vertex_index += 3;
     }
 
     pub fn push_quad(&mut self, positions: [Position; 4], colors: [Color; 4])
     {
-        if self.triangle_index + 6 > MAX_BUFFER_SIZE
+        if self.vertex_index + 6 > MAX_BUFFER_SIZE
         {
-            error!("Vertex buffer full, ignoring triangle");
+            warn!("Vertex buffer full, ignoring triangle");
             return;
         }
 
@@ -105,14 +140,14 @@ impl Renderer
         let vertex6 = Vertex { position: [positions[1].0, positions[1].1], color: [colors[1].0, colors[1].1, colors[1].2] };
 
         let mut w = self.vertex_buffer.map_write();
-        w.set(self.triangle_index, vertex1);
-        w.set(self.triangle_index + 1, vertex2);
-        w.set(self.triangle_index + 2, vertex3);
-        w.set(self.triangle_index + 3, vertex4);
-        w.set(self.triangle_index + 4, vertex5);
-        w.set(self.triangle_index + 5, vertex6);
+        w.set(self.vertex_index, vertex1);
+        w.set(self.vertex_index + 1, vertex2);
+        w.set(self.vertex_index + 2, vertex3);
+        w.set(self.vertex_index + 3, vertex4);
+        w.set(self.vertex_index + 4, vertex5);
+        w.set(self.vertex_index + 5, vertex6);
 
-        self.triangle_index += 6;
+        self.vertex_index += 6;
     }
 }
 

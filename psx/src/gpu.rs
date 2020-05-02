@@ -71,10 +71,8 @@ pub enum Port
     GP1 = 1
 }
 
-#[derive(Debug)]
-pub struct Command(pub Port, pub u32);
-
-struct CommandBuffer
+#[derive(Debug, Clone)]
+pub struct CommandBuffer
 {
     data: [u32; 12], // 12 is the longest command size
     current_length: usize
@@ -117,6 +115,9 @@ impl ::std::ops::Index<usize> for CommandBuffer
         &self.data[i]
     }
 }
+
+#[derive(Debug)]
+pub struct CommandRecord(pub Port, pub CommandBuffer);
 
 enum GP0Mode
 {
@@ -196,10 +197,12 @@ pub struct GPU
 
     // Debugging
 
-    pub previous_commands: VecDeque<Command>,
+    pub previous_commands: VecDeque<CommandRecord>,
 
     renderer: Renderer
 }
+
+const MAX_COMMAND_RECORD_SIZE: usize = 1000;
 
 impl GPU
 {
@@ -246,7 +249,7 @@ impl GPU
             display_vertical_end: 0,
             display_vertical_start: 0,
 
-            previous_commands: VecDeque::with_capacity(100),
+            previous_commands: VecDeque::with_capacity(MAX_COMMAND_RECORD_SIZE),
 
             gp0_command_buffer: CommandBuffer::new(),
             gp0_command_method: GPU::gp0_nop,
@@ -274,19 +277,20 @@ impl GPU
         self.renderer.render(target);
     }
 
-    fn enqueue_command(&mut self, port: Port, command: u32)
+    fn save_command(&mut self, port: Port, command: CommandBuffer)
     {
-        if self.previous_commands.len() == 100
+        if self.previous_commands.len() == MAX_COMMAND_RECORD_SIZE
         {
             self.previous_commands.pop_front();
         }
 
-        self.previous_commands.push_back(Command(port, command))
+        // TODO only when debugging
+        self.previous_commands.push_back(CommandRecord(port, command))
     }
 
-    pub fn disassemble(&self, command: &Command) -> String
+    pub fn disassemble(&self, command: &CommandRecord) -> String
     {
-        let opcode = command.1 >> 24;
+        let opcode = command.1[0] >> 24;
 
         let description = match command.0
         {
@@ -294,37 +298,44 @@ impl GPU
             {
                 match opcode
                 {
-                    0x00 => "NOP",
-                    0x01 => "Clear cache",
-                    0x28 => "Draw quad monochrome opaque",
-                    0x2C => "Draw quad textured opaque",
-                    0x30 => "Draw triangle shaded opaque",
-                    0x38 => "Draw quad shaded opaque",
-                    0xA0 => "Load image",
-                    0xC0 => "Store image",
-                    0xE1 => "Draw mode",
-                    0xE2 => "Texture window",
-                    0xE3 => "Drawing area top left",
-                    0xE4 => "Drawing area bottom right",
-                    0xE5 => "Drawing offset",
-                    0xE6 => "Mask bit setting",
-                    _ => "[UNSUPPORTED COMMAND]"
+                    0x00 => "NOP".to_string(),
+                    0x01 => "Clear cache".to_string(),
+                    0x28 => "Draw quad monochrome opaque".to_string(),
+                    0x2C => "Draw quad textured opaque".to_string(),
+                    0x30 => "Draw triangle shaded opaque".to_string(),
+                    0x38 => "Draw quad shaded opaque".to_string(),
+                    0x68 =>
+                    {
+                        let pos = Position::from_command(command.1[1]);
+                        let color = Color::from_command(command.1[0]);
+                        format!("Draw dot monochrome opaque [pos={:?}, col={:?}]", pos, color)
+                    },
+                    0xA0 => "Load image".to_string(),
+                    0xC0 => "Store image".to_string(),
+                    0xE1 => "Draw mode".to_string(),
+                    0xE2 => "Texture window".to_string(),
+                    0xE3 => "Drawing area top left".to_string(),
+                    0xE4 => "Drawing area bottom right".to_string(),
+                    0xE5 => "Drawing offset".to_string(),
+                    0xE6 => "Mask bit setting".to_string(),
+                    _ => "[UNSUPPORTED COMMAND]".to_string()
                 }
             },
             Port::GP1 =>
             {
                 match opcode
                 {
-                    0x00 => "Reset",
-                    0x01 => "Reset command buffer",
-                    0x02 => "Acknowledge IRQ",
-                    0x03 => "Enable display",
-                    0x04 => "Setup DMA",
-                    0x05 => "Start of display area",
-                    0x06 => "Horizontal display range",
-                    0x07 => "Vertical display range",
-                    0x08 => "Display mode",
-                    _ => "[UNSUPPORTED COMMAND]"
+                    0x00 => "Reset".to_string(),
+                    0x01 => "Reset command buffer".to_string(),
+                    0x02 => "Acknowledge IRQ".to_string(),
+                    0x03 => "Enable display".to_string(),
+                    0x04 => "Setup DMA".to_string(),
+                    0x05 => "Start of display area".to_string(),
+                    0x06 => "Horizontal display range".to_string(),
+                    0x07 => "Vertical display range".to_string(),
+                    0x08 => "Display mode".to_string(),
+                    0x10 => "Get GPU info".to_string(),
+                    _ => "[UNSUPPORTED COMMAND]".to_string()
                 }
             },
         };
@@ -391,7 +402,7 @@ impl GPU
     pub fn gp0(&mut self, command: u32)
     {
         // No command being buffered, we start a new one
-        error!("GP0 {:08X}", command);
+
         if self.gp0_words_remaining == 0
         {
             let opcode = command >> 24;
@@ -404,6 +415,7 @@ impl GPU
                 0x2C => (GPU::gp0_draw_quad_textured_opaque as fn(&mut GPU), 9),
                 0x30 => (GPU::gp0_draw_triangle_shaded_opaque as fn(&mut GPU), 6),
                 0x38 => (GPU::gp0_draw_quad_shaded_opaque as fn(&mut GPU), 8),
+                0x68 => (GPU::gp0_draw_dot_mono_opaque as fn(&mut GPU), 2),
                 0xA0 => (GPU::gp0_load_image as fn(&mut GPU), 3),
                 0xC0 => (GPU::gp0_store_image as fn(&mut GPU), 3),
                 0xE1 => (GPU::gp0_draw_mode as fn(&mut GPU), 1),
@@ -419,8 +431,6 @@ impl GPU
             self.gp0_command_method = method;
             self.gp0_command_buffer.clear();
             self.gp0_words_remaining = word_count;
-
-            self.enqueue_command(Port::GP0, command);
         }
 
         self.gp0_words_remaining -= 1;
@@ -436,6 +446,8 @@ impl GPU
                 if self.gp0_words_remaining == 0
                 {
                     (self.gp0_command_method)(self);
+
+                    self.save_command(Port::GP0, self.gp0_command_buffer.clone());
                 }
             },
 
@@ -562,6 +574,31 @@ impl GPU
             Color::from_command(self.gp0_command_buffer[2]),
             Color::from_command(self.gp0_command_buffer[4]),
             Color::from_command(self.gp0_command_buffer[6])
+        ];
+
+        self.renderer.push_quad(positions, colors);
+    }
+
+    fn gp0_draw_dot_mono_opaque(&mut self)
+    {
+        let pos = Position::from_command(self.gp0_command_buffer[1]);
+
+        let positions =
+        [
+            pos,
+            Position(pos.0 + 1, pos.1),
+            Position(pos.0,     pos.1 + 1),
+            Position(pos.0 + 1, pos.1 + 1)
+        ];
+
+        let color = Color::from_command(self.gp0_command_buffer[0]);
+
+        let colors =
+        [
+            color,
+            color,
+            color,
+            color
         ];
 
         self.renderer.push_quad(positions, colors);
@@ -703,7 +740,7 @@ impl GPU
             _ => panic!("unsupported GP1 opcode {:0X}", opcode)
         }
 
-        self.enqueue_command(Port::GP1, command);
+        self.save_command(Port::GP1, CommandBuffer { data: [command; 12], current_length: 1});
     }
 
     fn gp1_reset(&mut self, value: u32)

@@ -99,7 +99,7 @@ impl System
         let System
         {
             event_loop,
-            display,
+            mut display,
             mut imgui,
             mut platform,
             mut renderer,
@@ -137,22 +137,22 @@ impl System
 
                 let gl_window = display.gl_window();
 
-                let mut target = display.draw();
+                let mut frame = display.draw();
 
                 // Clear
-                target.clear_color_srgb(0.0, 0.0, 0.0, 1.0);
+                frame.clear_color_srgb(0.0, 0.0, 0.0, 1.0);
 
                 // Draw the GPU output
-                p.gpu_mut().render(&mut target);
+                p.gpu_mut().render(&mut frame);
 
                 // Draw the UI
                 platform.prepare_render(&ui, gl_window.window());
                 let draw_data = ui.render();
                 renderer
-                    .render(&mut target, draw_data)
+                    .render(&mut frame, draw_data)
                     .expect("Rendering failed");
 
-                target.finish().expect("Failed to swap buffers");
+                frame.finish().expect("Failed to swap buffers");
             }
 
             Event::WindowEvent

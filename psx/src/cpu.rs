@@ -43,6 +43,7 @@ pub struct CPU
 
     // Exception handling
     current_pc: u32,
+    cop0_badaddr: u32, // TODO cop0 struct
     cop0_cause: u32,
     cop0_epc: u32,
 
@@ -56,7 +57,7 @@ pub struct CPU
     log_file: File,
     logging: bool,
 
-    pub debugger: Debugger,
+    pub debugger: Debugger, // TODO move out? or write memread/write function in cpu to wrap debugger registration
 
     interrupt_controller: Rc<RefCell<InterruptController>>,
 
@@ -84,6 +85,7 @@ impl CPU
 
             current_pc: 0,
 
+            cop0_badaddr: 0,
             cop0_cause: 0,
             cop0_epc: 0,
 
@@ -120,6 +122,8 @@ impl CPU
 
     pub fn step(&mut self, mem: &mut Memory) -> bool
     {
+        self.debugger.clear_data_access();
+
         // Apply any pending load
 
         self.set_reg(self.pending_load.0, self.pending_load.1);
@@ -152,11 +156,12 @@ impl CPU
 
         self.current_pc = self.pc;
 
-        if self.current_pc % 4 != 0
+        // TODO remove? dealt with in the jump instructions now
+        /*if self.current_pc % 4 != 0
         {
-            self.exception(Exception::LoadAddress);
+            self.alignment_exception(Exception::LoadAddress, self.current_pc);
             return true;
-        }
+        }*/
 
         let opcode = Opcode(mem.read(self.pc));
 
@@ -166,9 +171,9 @@ impl CPU
         // A few minor diff in R31
         //if self.counter >= 2695619+378397+314380-50 && self.counter < 2695619+378397+314380 + 1000000
 
-        let debug_addr = 2695619+378397+314380+1000000+271000+454620;
+        let debug_addr = 2695619+378397+314380+1000000+271000+454620+400000+250000+1000000+2200000+399553;
         let mut debug = false;
-        if self.counter >= debug_addr && self.counter < debug_addr + 100000
+        if self.counter >= debug_addr && self.counter < debug_addr + 400000
         {
             debug = true;
 
@@ -188,6 +193,7 @@ impl CPU
             }
             s += &format!("HI {:08x} ", self.hi);
             s += &format!("LO {:08x} ", self.lo);
+            s += &format!("S {:08x} ", self.status);
             s += &format!("\n");
 
             write!(&mut self.log_file, "{}", s).unwrap();
@@ -200,16 +206,6 @@ impl CPU
 
             self.logging = true;
         }
-
-        /*
-        let value = mem.read(0x801FFD4C);
-        if (value != self.last)
-        {
-          write!(&mut self.log_file, "changes NOW {} {:08X} {:08X}\n", self.counter, self.current_pc, value).unwrap();
-
-          self.last = value;
-        }
-*/
 
         self.counter += 1;
 
@@ -255,17 +251,7 @@ impl CPU
                     _        => self.illegal(&opcode),
                 }
             },
-            0b000001 =>
-            {
-                match opcode.rt()
-                {
-                    0b00000 => self.bltz(&opcode),
-                    0b00001 => self.bgez(&opcode),
-                    0b10000 => self.bltzal(&opcode),
-                    0b10001 => self.bgezal(&opcode),
-                    _       => self.illegal(&opcode)
-                }
-            },
+            0b000001 => self.bcond(&opcode),
             0b000010 => self.j(&opcode),
             0b000011 => self.jal(&opcode),
             0b000100 => self.beq(&opcode),
@@ -322,7 +308,7 @@ impl CPU
 
         // Check breakpoints
 
-        let stop = self.debugger.is_breakpoint(self.next_pc, self) && debug;//+378397;
+        let stop = (self.debugger.is_breakpoint(self.next_pc, self) || self.debugger.has_data_breakpoint()) && debug;
 
         !stop
     }
@@ -366,9 +352,46 @@ impl CPU
         (((self.cop0_cause & self.status) >> 8) & 0xFF) != 0 // pending (cause) & mask (status)
     }
 
+    // TODO replace with generic func
+    fn read8(&mut self, mem: &mut Memory, address: u32) -> u8
+    {
+        self.debugger.register_data_access(address, true);
+        mem.read8(address)
+    }
+
+    fn read16(&mut self, mem: &mut Memory, address: u32) -> u16
+    {
+        self.debugger.register_data_access(address, true);
+        mem.read16(address)
+    }
+
+    fn read32(&mut self, mem: &mut Memory, address: u32) -> u32
+    {
+        self.debugger.register_data_access(address, true);
+        mem.read(address)
+    }
+
+    fn write8(&mut self, mem: &mut Memory, address: u32, value: u8)
+    {
+        self.debugger.register_data_access(address, false);
+        mem.write8(address, value)
+    }
+
+    fn write16(&mut self, mem: &mut Memory, address: u32, value: u16)
+    {
+        self.debugger.register_data_access(address, false);
+        mem.write16(address, value)
+    }
+
+    fn write32(&mut self, mem: &mut Memory, address: u32, value: u32)
+    {
+        self.debugger.register_data_access(address, false);
+        mem.write(address, value)
+    }
+
     fn illegal(&mut self, opcode: &Opcode)
     {
-        error!("Illegal instruction: {:08x}", opcode);
+        error!("Illegal instruction: {:08X}", opcode);
         self.exception(Exception::IllegalInstruction);
     }
 
@@ -550,6 +573,38 @@ impl CPU
         self.branching = true;
     }
 
+    fn bcond(&mut self, opcode: &Opcode)
+    {
+        // Contrarily to what the nocash doc implies, there are more than
+        // 4 fixed opcodes for the conditional branching instructions.
+        //
+        // They rather act as a single instruction with a different outcome
+        // depending on the condition (bit 16) and linking (bit 20-17).
+
+        let mode = opcode.rt();
+
+        // Evaluate the condition
+
+        let rs = self.reg(opcode.rs()) as i32;
+
+        let branch = if mode & 1 != 0 { rs >= 0 } else { rs < 0 }; // BGEZxx / BLTZxx
+
+        if branch
+        {
+            self.next_pc = self.pc.wrapping_add(opcode.imm_se() << 2);
+        }
+
+        // If linking, out the return address in register 31 whatever the outcome
+
+        if mode & 0b11110 == 0b10000
+        {
+            // TODO delayed or not?
+            self.set_reg(31, self.pc.wrapping_add(4)); // (+4 to go after the branch-delay slot)
+        }
+
+        self.branching = true;
+    }
+
     fn bgtz(&mut self, opcode: &Opcode)
     {
         trace!("BGTZ _ branch to PC + {:08x} << 2 = {:08x} if R{}={:08x} > 0", opcode.imm_se(), self.pc.wrapping_add(opcode.imm_se() << 2), opcode.rs(), self.reg(opcode.rs()));
@@ -578,77 +633,15 @@ impl CPU
         self.branching = true;
     }
 
-    fn bgez(&mut self, opcode: &Opcode)
-    {
-        trace!("BGEZ _ branch to PC + {:08x} << 2 = {:08x} if R{}={:08x} >= 0", opcode.imm_se(), self.pc.wrapping_add(opcode.imm_se() << 2), opcode.rs(), self.reg(opcode.rs()));
-
-        let rs = self.reg(opcode.rs()) as i32;
-
-        if rs >= 0
-        {
-            self.next_pc = self.pc.wrapping_add(opcode.imm_se() << 2);
-        }
-
-        self.branching = true;
-    }
-
-    fn bgezal(&mut self, opcode: &Opcode)
-    {
-        trace!("BGEZAL _ branch to PC + {:08x} << 2 = {:08x} if R{}={:08x} >= 0", opcode.imm_se(), self.pc.wrapping_add(opcode.imm_se() << 2), opcode.rs(), self.reg(opcode.rs()));
-
-        let rs = self.reg(opcode.rs()) as i32;
-
-        // Put the return address in register 31 whatever the outcome (+4 to go after the branch-delay slot)
-        self.set_reg(31, self.pc.wrapping_add(4));
-
-        if rs >= 0
-        {
-            self.next_pc = self.pc.wrapping_add(opcode.imm_se() << 2);
-        }
-
-        self.branching = true;
-    }
-
-    fn bltz(&mut self, opcode: &Opcode)
-    {
-        trace!("BLTZ _ branch to PC + {:08x} << 2 = {:08x} if R{}={:08x} < 0", opcode.imm_se(), self.pc.wrapping_add(opcode.imm_se() << 2), opcode.rs(), self.reg(opcode.rs()));
-
-        let rs = self.reg(opcode.rs()) as i32;
-
-        if rs < 0
-        {
-            self.next_pc = self.pc.wrapping_add(opcode.imm_se() << 2);
-        }
-
-        self.branching = true;
-    }
-
-    fn bltzal(&mut self, opcode: &Opcode)
-    {
-        trace!("BLTZAL _ branch to PC + {:08x} << 2 = {:08x} if R{}={:08x} < 0", opcode.imm_se(), self.pc.wrapping_add(opcode.imm_se() << 2), opcode.rs(), self.reg(opcode.rs()));
-
-        let rs = self.reg(opcode.rs()) as i32;
-
-        // Put the return address in register 31 whatever the outcome (+4 to go after the branch-delay slot)
-        self.set_reg(31, self.pc.wrapping_add(4));
-
-        if rs < 0
-        {
-            self.next_pc = self.pc.wrapping_add(opcode.imm_se() << 2);
-        }
-
-        self.branching = true;
-    }
-
     fn cop0_mfc(&mut self, opcode: &Opcode)
     {
         trace!("COP0 MFC | COP R{} -> R{}", opcode.rd(), opcode.rt());
 
         let value = match opcode.rd()
         {
-            6 => { error!("COP JUMPDEST READ not implemented"); 0 },
-            7 => { error!("COP DCIC READ not implemented"); 0 },
-            8 => { error!("COP BADADDR READ not implemented"); 0 },
+            6 => { warn!("COP JUMPDEST READ not implemented"); 0 },
+            7 => { warn!("COP DCIC READ not implemented"); 0 },
+            8 => self.cop0_badaddr,
             12 => self.status,
             13 =>
             {
@@ -670,9 +663,12 @@ impl CPU
 
         match opcode.rd()
         {
-            3 | 5 | 6 | 7| 9 | 11 => trace!("Ignored write to CR{}", opcode.rd()),
+            3 | 5 | 6 | 7| 9 | 11 => warn!("Ignored write to CR{}", opcode.rd()),
 
-            12 => self.status = self.reg(opcode.rt()),
+            12 => {
+                self.status = self.reg(opcode.rt());
+                //write!(&mut self.log_file, "write STATUS {:08x} {:08x} {:x}\n", self.status, self.current_pc, self.counter);
+            },
 
             13 =>
             {
@@ -692,7 +688,9 @@ impl CPU
     {
         trace!("COP0 RFE");
 
-        self.status = (self.status & !0x3F) | ((self.status & 0x3F) >> 2);
+        // Shift the interrupt stack to the right (but the "old" values at the left remain unchanged)
+        self.status = (self.status & !0b001111) | ((self.status >> 2) & 0b001111);
+        //write!(&mut self.log_file, "RFE STATUS {:08x} {:08x} {:x}\n", self.status, self.current_pc, self.counter);
     }
 
     fn cop1(&mut self)
@@ -731,6 +729,11 @@ impl CPU
         self.set_reg(31, self.next_pc);
         self.next_pc = (self.pc & 0xF0000000) | (opcode.imm26() << 2);
         self.branching = true;
+
+        if self.next_pc % 4 != 0 // TODO bit
+        {
+            self.alignment_exception(Exception::LoadAddress, self.next_pc, true);
+        }
     }
 
     fn jalr(&mut self, opcode: &Opcode)
@@ -740,6 +743,11 @@ impl CPU
         self.set_reg(opcode.rd(), self.next_pc);
         self.next_pc = self.reg(opcode.rs());
         self.branching = true;
+
+        if self.next_pc % 4 != 0 // TODO bit
+        {
+            self.alignment_exception(Exception::LoadAddress, self.next_pc, true);
+        }
     }
 
     fn jr(&mut self, opcode: &Opcode)
@@ -748,6 +756,11 @@ impl CPU
 
         self.next_pc = self.reg(opcode.rs());
         self.branching = true;
+
+        if self.next_pc % 4 != 0 // TODO bit
+        {
+            self.alignment_exception(Exception::LoadAddress, self.next_pc, true);
+        }
     }
 
     fn lui(&mut self, opcode: &Opcode)
@@ -768,10 +781,17 @@ impl CPU
         }
 
         let address = self.reg(opcode.rs()).wrapping_add(opcode.imm_se());
-        let result = mem.read8(address) as i8;
+        let result = self.read8(mem, address) as i8;
 
-        // Put in the load-delay slot
-        self.pending_load = (opcode.rt(), result as u32);
+        let rt = opcode.rt();
+
+        // Double delayed loads on the same register: cancel the previous load
+        if self.previous_pending_load.0 == rt
+        {
+            self.r_next[rt as usize] = self.r[rt as usize];
+        }
+
+        self.pending_load = (rt, result as u32); // in the load-delay slot
     }
 
     fn lbu(&mut self, mem: &mut Memory, opcode: &Opcode)
@@ -784,11 +804,20 @@ impl CPU
             return;
         }
 
-        let address = self.reg(opcode.rs()).wrapping_add(opcode.imm_se());
-        let result = mem.read8(address);
 
-        // Put in the load-delay slot
-        self.pending_load = (opcode.rt(), result as u32);
+
+        let address = self.reg(opcode.rs()).wrapping_add(opcode.imm_se());
+        let result = self.read8(mem, address);
+
+        let rt = opcode.rt();
+
+        // Double delayed loads on the same register: cancel the previous load
+        if self.previous_pending_load.0 == rt
+        {
+            self.r_next[rt as usize] = self.r[rt as usize];
+        }
+
+        self.pending_load = (rt, result as u32); // in the load-delay slot
     }
 
     fn lh(&mut self, mem: &mut Memory, opcode: &Opcode)
@@ -805,12 +834,21 @@ impl CPU
 
         if address % 2 == 0
         {
-            let result = mem.read16(address) as i16;
-            self.pending_load = (opcode.rt(), result as u32); // in the load-delay slot
+            let result = self.read16(mem, address) as i16;
+
+            let rt = opcode.rt();
+
+            // Double delayed loads on the same register: cancel the previous load
+            if self.previous_pending_load.0 == rt
+            {
+                self.r_next[rt as usize] = self.r[rt as usize];
+            }
+
+            self.pending_load = (rt, result as u32); // in the load-delay slot
         }
         else
         {
-            self.exception(Exception::LoadAddress);
+            self.alignment_exception(Exception::LoadAddress, address, false);
         }
     }
 
@@ -828,12 +866,21 @@ impl CPU
 
         if address % 2 == 0
         {
-            let result = mem.read16(address);
-            self.pending_load = (opcode.rt(), result as u32); // in the load-delay slot
+            let result = self.read16(mem, address);
+
+            let rt = opcode.rt();
+
+            // Double delayed loads on the same register: cancel the previous load
+            if self.previous_pending_load.0 == rt
+            {
+                self.r_next[rt as usize] = self.r[rt as usize];
+            }
+
+            self.pending_load = (rt, result as u32); // in the load-delay slot
         }
         else
         {
-            self.exception(Exception::LoadAddress);
+            self.alignment_exception(Exception::LoadAddress, address, false);
         }
     }
 
@@ -853,19 +900,18 @@ impl CPU
         {
             let rt = opcode.rt();
 
-            // TODO for other loads?
             // Double delayed loads on the same register: cancel the previous load
             if self.previous_pending_load.0 == rt
             {
                 self.r_next[rt as usize] = self.r[rt as usize];
             }
 
-            let value = mem.read(address);
+            let value = self.read32(mem, address);
             self.pending_load = (rt, value); // in the load-delay slot
         }
         else
         {
-            self.exception(Exception::LoadAddress);
+            self.alignment_exception(Exception::LoadAddress, address, false);
         }
     }
 
@@ -878,7 +924,7 @@ impl CPU
         // Bypass the load-delay slot
         let value = self.r_next[opcode.rt() as usize];
 
-        let aligned_value = mem.read(address & !3);
+        let aligned_value = self.read32(mem, address & !3);
 
         let result = match address & 3
         {
@@ -889,7 +935,15 @@ impl CPU
             _ => unreachable!()
         };
 
-        self.pending_load = (opcode.rt(), result);
+        let rt = opcode.rt();
+
+        // Double delayed loads on the same register: cancel the previous load
+        if self.previous_pending_load.0 == rt
+        {
+            self.r_next[rt as usize] = self.r[rt as usize];
+        }
+
+        self.pending_load = (rt, result);
     }
 
     fn lwr(&mut self, mem: &mut Memory, opcode: &Opcode)
@@ -901,7 +955,7 @@ impl CPU
         // Load-delay slot
         let value = self.r_next[opcode.rt() as usize];
 
-        let aligned_value = mem.read(address & !3);
+        let aligned_value = self.read32(mem, address & !3);
 
         let result = match address & 3
         {
@@ -912,7 +966,15 @@ impl CPU
             _ => unreachable!()
         };
 
-        self.pending_load = (opcode.rt(), result);
+        let rt = opcode.rt();
+
+        // Double delayed loads on the same register: cancel the previous load
+        if self.previous_pending_load.0 == rt
+        {
+            self.r_next[rt as usize] = self.r[rt as usize];
+        }
+
+        self.pending_load = (rt, result);
     }
 
     fn or(&mut self, opcode: &Opcode)
@@ -1066,7 +1128,7 @@ impl CPU
 
         let address = self.reg(opcode.rs()).wrapping_add(opcode.imm_se());
         let value = self.reg(opcode.rt()) as u8;
-        mem.write8(address, value);
+        self.write8(mem, address, value);
     }
 
     fn sh(&mut self, mem: &mut Memory, opcode: &Opcode)
@@ -1084,11 +1146,11 @@ impl CPU
         if address % 2 == 0
         {
             let value = self.reg(opcode.rt()) as u16;
-            mem.write16(address, value);
+            self.write16(mem, address, value);
         }
         else
         {
-            self.exception(Exception::StoreAddress);
+            self.alignment_exception(Exception::StoreAddress, address, false);
         }
     }
 
@@ -1107,52 +1169,56 @@ impl CPU
         if address % 4 == 0
         {
             let value = self.reg(opcode.rt());
-            mem.write(address, value);
+            self.write32(mem, address, value);
         }
         else
         {
-            self.exception(Exception::StoreAddress);
+            self.alignment_exception(Exception::StoreAddress, address, false);
         }
     }
 
     fn swl(&mut self, mem: &mut Memory, opcode: &Opcode)
     {
-        let address = self.reg(opcode.rs()).wrapping_add(opcode.imm_se());
         let value = self.reg(opcode.rt());
 
+        let address = self.reg(opcode.rs()).wrapping_add(opcode.imm_se());
         let aligned_address = address & !3;
-        let aligned_value = mem.read(aligned_address);
+        let aligned_value = self.read32(mem, aligned_address);
 
         let result = match address & 3
         {
-            0 => (aligned_value & 0xFFFFFF00) | (value << 24),
-            1 => (aligned_value & 0xFFFF0000) | (value << 16),
-            2 => (aligned_value & 0xFF000000) | (value << 8),
-            3 => aligned_value,
+            0 => (aligned_value & 0xFFFFFF00) | (value >> 24),
+            1 => (aligned_value & 0xFFFF0000) | (value >> 16),
+            2 => (aligned_value & 0xFF000000) | (value >> 8),
+            3 => value,
             _ => unreachable!()
         };
 
-        mem.write(address, result);
+        //write!(&mut self.log_file, "SWL addr {:08x} = {:08x}, reg {:08x} -> {:08x}\n", address, aligned_value, value, result).unwrap();
+
+        self.write32(mem, aligned_address, result);
     }
 
     fn swr(&mut self, mem: &mut Memory, opcode: &Opcode)
     {
-        let address = self.reg(opcode.rs()).wrapping_add(opcode.imm_se());
         let value = self.reg(opcode.rt());
 
+        let address = self.reg(opcode.rs()).wrapping_add(opcode.imm_se());
         let aligned_address = address & !3;
-        let aligned_value = mem.read(aligned_address);
+        let aligned_value = self.read32(mem, aligned_address);
 
         let result = match address & 3
         {
-            0 => aligned_value,
+            0 => value,
             1 => (aligned_value & 0x000000FF) | (value << 8),
             2 => (aligned_value & 0x0000FFFF) | (value << 16),
             3 => (aligned_value & 0x00FFFFFF) | (value << 24),
             _ => unreachable!()
         };
 
-        mem.write(address, result);
+        //write!(&mut self.log_file, "SWR addr {:08x} = {:08x}, reg {:08x} -> {:08x}\n", address, aligned_value, value, result).unwrap();
+
+        mem.write(aligned_address, result);
     }
 
     fn mflo(&mut self, opcode: &Opcode)
@@ -1183,14 +1249,26 @@ impl CPU
         self.hi = self.reg(opcode.rs());
     }
 
+    fn alignment_exception(&mut self, exception: Exception, address: u32, branch: bool)
+    {
+        error!("BAD ADDR = {:08X} @ {:08X}", address, self.current_pc);
+        self.cop0_badaddr = address;
+        self.raise_exception(exception, if branch {address} else {self.current_pc});
+    }
+
     fn exception(&mut self, exception: Exception)
     {
+        self.raise_exception(exception, self.current_pc);
+    }
+
+    fn raise_exception(&mut self, exception: Exception, epc: u32)
+    {
         //write!(&mut self.log_file, "EXCEPTION {}\n", exception.clone() as i32).unwrap();
-        error!("  EXCEPTION {}", exception.clone() as i32);
-        error!("  PC {:08X}", self.pc);
+        error!("  EXCEPTION {:?}", &exception);
+        //error!("  PC {:08X}", self.pc);
 
-        self.cop0_epc = self.current_pc;
-
+        self.cop0_epc = epc;
+error!("EPC = {:08X}", self.cop0_epc);
         // Update the exception's cause in the CAUSE register
         self.cop0_cause = (self.cop0_cause & !0x7C) | ((exception as u32) << 2);
 
@@ -1209,11 +1287,12 @@ impl CPU
 
         // Stack the exception
         self.status = (self.status & !0x3F) | ((self.status << 2) & 0x3F);
+        //write!(&mut self.log_file, "exception STATUS {:08x} {:08x} {:x}\n", self.status, self.current_pc, self.counter);
 
         // Two possible handler addresses depending on the status' BEV bit
         let handler = if (self.status & (1 << 22)) != 0 { 0xBFC00180 } else { 0x80000080 };
 
-        error!("  NPC {:08X}", handler);
+        //error!("  NPC {:08X}", handler);
 
         self.pc = handler;
         self.next_pc = handler.wrapping_add(4);
