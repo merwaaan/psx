@@ -1,4 +1,5 @@
 use crate::interrupt_controller::{InterruptController, InterruptRequest};
+use crate::memory::{ Addressable, Width };
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -47,15 +48,20 @@ impl CDROM
     }
 
     // TODO read is mut self which is weird, use some form of interior mutability?
-    pub fn read8(&mut self, offset: u32) -> u8
+    pub fn read<T: Addressable>(&mut self, offset: u32) -> T
     {
         error!("CDROM read8 @ {} (index {})", offset, self.index);
+
+        if T::width() != Width::Word
+        {
+            panic!("GPU read, unexpected width {:?}");
+        }
 
         match offset
         {
             0 =>
             {
-                self.status()
+                T::from_u8(self.status())
             },
 
             // Response FIFO
@@ -66,27 +72,27 @@ impl CDROM
                     Some(value) =>
                     {
                         error!("CDROM pop response FIFO: {:02X}", value);
-                        value
+                        T::from_u8(value)
                     },
                     None =>
                     {
                         error!("CDROM response FIFO empty");
-                        0 // TODO correct behavior?
+                        T::from_u8(0) // TODO correct behavior?
                     }
                 }
             },
 
             2 =>
             {
-                0// data FIFO
+                T::from_u8(0) // data FIFO
             },
 
             3 =>
             {
                 match self.index
                 {
-                    0 | 2 => self.interrupt_enable,
-                    1 | 3 => self.interrupt_flag,
+                    0 | 2 => T::from_u8(self.interrupt_enable),
+                    1 | 3 => T::from_u8(self.interrupt_flag),
                     n => panic!("invalid index {}", n)
                 }
             },
@@ -95,15 +101,22 @@ impl CDROM
         }
     }
 
-    pub fn write8(&mut self, offset: u32, value: u8)
+    pub fn write<T: Addressable>(&mut self, offset: u32, value: T)
     {
-        error!("CDROM write8 {:08X} @ {} (index {})", value, offset, self.index);
+        //error!("CDROM write8 {:08X} @ {} (index {})", value, offset, self.index);
+
+        if T::width() != Width::Word
+        {
+            panic!("GPU write, unexpected width {:?}");
+        }
+
+        let value = value.as_u8();
 
         match offset
         {
             0 =>
             {
-                self.index = (value as u8) & 3;
+                self.index = value & 3;
             },
 
             1 =>

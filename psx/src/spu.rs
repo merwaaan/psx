@@ -102,35 +102,7 @@ impl SPU
         }
     }
 
-    pub fn read8(&self, addr: u32) -> u8
-    {
-        //if addr >= 0x188 && addr <= 0x18F
-        {
-        //error!("SPU control registers read8 @ {:08X}", addr + SPU_OFFSET);
-        }
-
-        /*match addr
-        {
-            // Voice keys
-            0x1F801D88 => self.voice_key,
-            0x1F801D88 => self.voice_key,
-            0x1F801D88 => self.voice_key,
-            0x1F801D88 => self.voice_key,
-
-            _ => self.data[addr as usize]
-        }*/
-
-        match addr
-        {
-            //0x1AA => self.control = Control(val),
-            //0x1AE => (), // Status is read-only
-            _ => panic!()
-        }
-
-        //self.data[addr as usize]
-    }
-
-    pub fn read16(&self, addr: u32) -> u16
+    pub fn read(&self, addr: u32) -> u16
     {
         //if addr >= 0x188 && addr <= 0x18F
         {
@@ -177,48 +149,7 @@ impl SPU
         (b1 << 8) | b0*/
     }
 
-    pub fn read32(&self, addr: u32) -> u32
-    {
-        //if addr >= 0x188 && addr <= 0x18F
-        {
-       // error!("SPU control registers read32 @ {:08X}", addr + SPU_OFFSET);
-        }
-
-        match addr
-        {
-            //0x1AA => self.control = Control(val),
-            //0x1AE => (), // Status is read-only
-            _ => panic!()
-        }
-
-        /*let offset = addr as usize;
-
-        let b0 = self.data[offset] as u32;
-        let b1 = self.data[offset + 1] as u32;
-        let b2 = self.data[offset + 2] as u32;
-        let b3 = self.data[offset + 3] as u32;
-
-        (b3 << 24) | (b2 << 16) | (b1 << 8) | b0*/
-    }
-
-    pub fn write8(&mut self, addr: u32, _val: u8)
-    {
-        //if addr >= 0x188 && addr <= 0x18F
-        {
-        //error!("SPU control registers write8 {:02X} @ {:08X}", val, addr + SPU_OFFSET);
-        }
-
-        match addr
-        {
-            //0x1AA => self.control = Control(val),
-            //0x1AE => (), // Status is read-only
-            _ => panic!()
-        }
-
-        //self.data[addr as usize] = val
-    }
-
-    pub fn write16(&mut self, addr: u32, val: u16)
+    pub fn write(&mut self, addr: u32, val: u16)
     {
         //if addr >= 0x188 && addr <= 0x18F
         {
@@ -293,28 +224,5 @@ impl SPU
         /*let offset = addr as usize;
         self.data[offset] = val as u8;
         self.data[offset + 1] = (val >> 8) as u8;*/
-    }
-
-    pub fn write32(&mut self, addr: u32, _val: u32)
-    {
-        //if addr >= 0x188 && addr <= 0x18F
-        {
-        //error!("SPU control registers write32 {:08X} @ {:08X}", val, addr + SPU_OFFSET);
-        }
-
-        match addr
-        {
-            //0x1AA => self.control = Control(val),
-            //0x1AE => (), // Status is read-only
-            _ => panic!()
-        }
-
-        /*
-        let offset = addr as usize;
-        self.data[offset] = val as u8;
-        self.data[offset + 1] = ((val & 0xFF00) >> 8) as u8;
-        self.data[offset + 2] = ((val & 0xFF0000) >> 16) as u8;
-        self.data[offset + 3] = ((val & 0xFF000000) >> 24) as u8;
-        */
     }
 }

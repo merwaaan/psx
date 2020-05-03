@@ -99,7 +99,7 @@ impl System
         let System
         {
             event_loop,
-            mut display,
+            display,
             mut imgui,
             mut platform,
             mut renderer,

@@ -1,5 +1,6 @@
 use crate::gpu::GPU;
-use crate::ram::RAM;
+use crate::memory::{ Addressable, Width };
+use crate::memory_segment::MemorySegment;
 
 #[derive(Debug, Copy, Clone)]
 enum TransferDirection
@@ -187,8 +188,13 @@ impl DMA
         }
     }
 
-    pub fn read(&self, offset: u32) -> u32
+    pub fn read<T: Addressable>(&self, offset: u32) -> T
     {
+        if T::width() != Width::Word
+        {
+            panic!("unexpected DMA read {:?}", T::width());
+        }
+
         match offset
         {
             0 ..= 0x6F =>
@@ -198,22 +204,33 @@ impl DMA
 
                 match offset & 0xF
                 {
-                    0 => channel.base_address,
-                    4 => channel.block_control_register(),
-                    8 => channel.control_register(),
+                    0 => T::from_u32(channel.base_address),
+                    4 => T::from_u32(channel.block_control_register()),
+                    8 => T::from_u32(channel.control_register()),
                     _ => panic!("unsuppported DMA channel read @ {:08X}", offset)
                 }
             },
 
-            0x70 => self.control,
-            0x74 => self.interrupt_register(),
+            0x70 => T::from_u32(self.control),
+            0x74 => T::from_u32(self.interrupt_register()),
 
-            _    => { error!("unsupported DMA read"); 0 }
+            _    =>
+            {
+                error!("unsupported DMA read");
+                T::from_u32(0)
+            }
         }
     }
 
-    pub fn write(&mut self, offset: u32, value: u32, ram: &mut RAM, gpu: &mut GPU)
+    pub fn write<T: Addressable>(&mut self, offset: u32, value: T, ram: &mut MemorySegment, gpu: &mut GPU)
     {
+        if T::width() != Width::Word
+        {
+            panic!("unexpected DMA write {:?}", T::width());
+        }
+
+        let value = value.as_u32();
+
         match offset
         {
             0 ..= 0x6F =>
@@ -276,7 +293,7 @@ impl DMA
         self.irq_channel_status &= !reset;
     }
 
-    fn transfer(&mut self, port: Port, ram: &mut RAM, gpu: &mut GPU)
+    fn transfer(&mut self, port: Port, ram: &mut MemorySegment, gpu: &mut GPU)
     {
         match self.channel(port).sync_mode
         {
@@ -285,7 +302,7 @@ impl DMA
         }
     }
 
-    fn transfer_block(&mut self, port: Port, ram: &mut RAM, gpu: &mut GPU)
+    fn transfer_block(&mut self, port: Port, ram: &mut MemorySegment, gpu: &mut GPU)
     {
         let channel = self.channel_mut(port);
 
@@ -315,7 +332,7 @@ impl DMA
                             let actual_address = address & 0x1FFFFC; // The address must stay in RAM & aligned
 
                             // TODO other channels than OTC
-                            let value = ram.read32(actual_address);
+                            let value = ram.read::<u32>(actual_address);
 
                             info!("GPU command {:08X}", value);
                             gpu.gp0(value);
@@ -347,7 +364,7 @@ impl DMA
                                 _ => actual_address.wrapping_sub(4) & 0x1FFFFF // Pointer to the previous entry
                             };
 
-                            ram.write32(actual_address, value);
+                            ram.write::<u32>(actual_address, value);
 
                             info!("{:0X} {:0X}", actual_address, value);
 
@@ -370,7 +387,7 @@ impl DMA
         channel.trigger = false;
     }
 
-    fn transfer_linked_list(&mut self, port: Port, ram: &mut RAM, gpu: &mut GPU)
+    fn transfer_linked_list(&mut self, port: Port, ram: &mut MemorySegment, gpu: &mut GPU)
     {
         let channel = self.channel_mut(port);
 
@@ -390,7 +407,7 @@ impl DMA
                     {
                         loop
                         {
-                            let header = ram.read32(address);
+                            let header = ram.read::<u32>(address);
                             info!("header {:08X}", header);
 
                             // Send the commands to the GPU
@@ -402,7 +419,7 @@ impl DMA
                             while word_count > 0
                             {
                                 address = address.wrapping_add(4) & 0x1FFFFC;
-                                let value = ram.read32(address);
+                                let value = ram.read::<u32>(address);
 
                                 info!("GPU command {:08X}", value);
                                 gpu.gp0(value);

@@ -4,7 +4,7 @@ use psx::psx::PSX; // TODO rename to System or something
 
 use imgui::*;
 use std::env;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 mod support;
 
@@ -353,7 +353,7 @@ fn main()
 
                     for i in 0 .. 16
                     {
-                        let value = p.mem.read8(offset as u32 + i);
+                        let value = p.mem.read::<u8>(offset as u32 + i);
 
                         ui.text_colored(
                             if value == 0 { COLOR_DIMMED } else { COLOR_DEFAULT },
@@ -376,7 +376,7 @@ fn main()
 
                     for i in 0 .. 16
                     {
-                        let value = p.mem.read8(offset as u32 + i);
+                        let value = p.mem.read::<u8>(offset as u32 + i);
 
                         ui.text_colored(
                             if value == 0 { COLOR_DIMMED } else { COLOR_DEFAULT },

@@ -1,7 +1,7 @@
 use crate::debugger::Debugger;
 use crate::exefile::ExeFile;
 use crate::interrupt_controller::InterruptController;
-use crate::memory::Memory;
+use crate::memory::{ Addressable, Memory };
 use crate::opcode::Opcode;
 
 use std::cell::RefCell;
@@ -52,7 +52,6 @@ pub struct CPU
     in_delay_slot: bool,
 
     pub counter: u32, // debug helper
-    last : u32,
 
     log_file: File,
     logging: bool,
@@ -96,7 +95,6 @@ impl CPU
             in_delay_slot: false,
 
             counter: 0,
-            last: 0,
 
             log_file: File::create("custom_log_own.txt").unwrap(),
             logging: false,
@@ -160,21 +158,17 @@ impl CPU
         self.current_pc = self.pc;
 
         // TODO remove? dealt with in the jump instructions now
-        /*if self.current_pc % 4 != 0
+        if self.current_pc % 4 != 0
         {
-            self.alignment_exception(Exception::LoadAddress, self.current_pc);
-            return true;
-        }*/
+            panic!("unexpected unaligned address {:08X}", self.current_pc);
+        }
 
         let opcode = Opcode(mem.read(self.pc));
 
         self.pc = self.next_pc;
         self.next_pc = self.pc.wrapping_add(4);
 
-        // A few minor diff in R31
-        //if self.counter >= 2695619+378397+314380-50 && self.counter < 2695619+378397+314380 + 1000000
-
-        let debug_addr = 2695619+378397+314380+1000000+271000+454620+400000+250000+1000000+2200000+399553;
+        /*let debug_addr = 2695619+378397+314380+1000000+271000+454620+400000+250000+1000000+2200000+399553;
         let mut debug = false;
         if self.counter >= debug_addr && self.counter < debug_addr + 400000
         {
@@ -208,7 +202,7 @@ impl CPU
 
 
             self.logging = true;
-        }
+        }*/
 
         self.counter += 1;
 
@@ -311,7 +305,7 @@ impl CPU
 
         // Check breakpoints
 
-        let stop = (self.debugger.is_breakpoint(self.next_pc, self) || self.debugger.has_data_breakpoint()) && debug;
+        let stop = self.debugger.is_breakpoint(self.next_pc, self) || self.debugger.has_data_breakpoint();
 
         !stop
     }
@@ -355,41 +349,16 @@ impl CPU
         (((self.cop0_cause & self.status) >> 8) & 0xFF) != 0 // pending (cause) & mask (status)
     }
 
-    // TODO replace with generic func
-    fn read8(&mut self, mem: &mut Memory, address: u32) -> u8
+    fn read<T: Addressable>(&mut self, mem: &mut Memory, address: u32) -> T// TODO mut because of debuffer??
     {
         self.debugger.register_data_access(address, true);
-        mem.read8(address)
+        mem.read::<T>(address)
     }
 
-    fn read16(&mut self, mem: &mut Memory, address: u32) -> u16
-    {
-        self.debugger.register_data_access(address, true);
-        mem.read16(address)
-    }
-
-    fn read32(&mut self, mem: &mut Memory, address: u32) -> u32
-    {
-        self.debugger.register_data_access(address, true);
-        mem.read(address)
-    }
-
-    fn write8(&mut self, mem: &mut Memory, address: u32, value: u8)
+    fn write<T: Addressable>(&mut self, mem: &mut Memory, address: u32, value: T)
     {
         self.debugger.register_data_access(address, false);
-        mem.write8(address, value)
-    }
-
-    fn write16(&mut self, mem: &mut Memory, address: u32, value: u16)
-    {
-        self.debugger.register_data_access(address, false);
-        mem.write16(address, value)
-    }
-
-    fn write32(&mut self, mem: &mut Memory, address: u32, value: u32)
-    {
-        self.debugger.register_data_access(address, false);
-        mem.write(address, value)
+        mem.write::<T>(address, value)
     }
 
     fn illegal(&mut self, opcode: &Opcode)
@@ -666,7 +635,7 @@ impl CPU
 
         match opcode.rd()
         {
-            3 | 5 | 6 | 7| 9 | 11 => warn!("Ignored write to CR{}", opcode.rd()),
+            3 | 5 | 6 | 7| 9 | 11 => warn!("Ignoring write to CR{}", opcode.rd()),
 
             12 => {
                 self.status = self.reg(opcode.rt());
@@ -784,7 +753,7 @@ impl CPU
         }
 
         let address = self.reg(opcode.rs()).wrapping_add(opcode.imm_se());
-        let result = self.read8(mem, address) as i8;
+        let result = self.read::<u8>(mem, address) as i8;
 
         let rt = opcode.rt();
 
@@ -810,7 +779,7 @@ impl CPU
 
 
         let address = self.reg(opcode.rs()).wrapping_add(opcode.imm_se());
-        let result = self.read8(mem, address);
+        let result = self.read::<u8>(mem, address);
 
         let rt = opcode.rt();
 
@@ -837,7 +806,7 @@ impl CPU
 
         if address % 2 == 0
         {
-            let result = self.read16(mem, address) as i16;
+            let result = self.read::<u16>(mem, address) as i16;
 
             let rt = opcode.rt();
 
@@ -869,7 +838,7 @@ impl CPU
 
         if address % 2 == 0
         {
-            let result = self.read16(mem, address);
+            let result = self.read::<u16>(mem, address);
 
             let rt = opcode.rt();
 
@@ -909,7 +878,7 @@ impl CPU
                 self.r_next[rt as usize] = self.r[rt as usize];
             }
 
-            let value = self.read32(mem, address);
+            let value = self.read::<u32>(mem, address);
             self.pending_load = (rt, value); // in the load-delay slot
         }
         else
@@ -927,7 +896,7 @@ impl CPU
         // Bypass the load-delay slot
         let value = self.r_next[opcode.rt() as usize];
 
-        let aligned_value = self.read32(mem, address & !3);
+        let aligned_value = self.read::<u32>(mem, address & !3);
 
         let result = match address & 3
         {
@@ -958,7 +927,7 @@ impl CPU
         // Load-delay slot
         let value = self.r_next[opcode.rt() as usize];
 
-        let aligned_value = self.read32(mem, address & !3);
+        let aligned_value = self.read::<u32>(mem, address & !3);
 
         let result = match address & 3
         {
@@ -1131,7 +1100,7 @@ impl CPU
 
         let address = self.reg(opcode.rs()).wrapping_add(opcode.imm_se());
         let value = self.reg(opcode.rt()) as u8;
-        self.write8(mem, address, value);
+        self.write::<u8>(mem, address, value);
     }
 
     fn sh(&mut self, mem: &mut Memory, opcode: &Opcode)
@@ -1149,7 +1118,7 @@ impl CPU
         if address % 2 == 0
         {
             let value = self.reg(opcode.rt()) as u16;
-            self.write16(mem, address, value);
+            self.write::<u16>(mem, address, value);
         }
         else
         {
@@ -1172,7 +1141,7 @@ impl CPU
         if address % 4 == 0
         {
             let value = self.reg(opcode.rt());
-            self.write32(mem, address, value);
+            self.write::<u32>(mem, address, value);
         }
         else
         {
@@ -1186,7 +1155,7 @@ impl CPU
 
         let address = self.reg(opcode.rs()).wrapping_add(opcode.imm_se());
         let aligned_address = address & !3;
-        let aligned_value = self.read32(mem, aligned_address);
+        let aligned_value = self.read::<u32>(mem, aligned_address);
 
         let result = match address & 3
         {
@@ -1199,7 +1168,7 @@ impl CPU
 
         //write!(&mut self.log_file, "SWL addr {:08x} = {:08x}, reg {:08x} -> {:08x}\n", address, aligned_value, value, result).unwrap();
 
-        self.write32(mem, aligned_address, result);
+        self.write::<u32>(mem, aligned_address, result);
     }
 
     fn swr(&mut self, mem: &mut Memory, opcode: &Opcode)
@@ -1208,7 +1177,7 @@ impl CPU
 
         let address = self.reg(opcode.rs()).wrapping_add(opcode.imm_se());
         let aligned_address = address & !3;
-        let aligned_value = self.read32(mem, aligned_address);
+        let aligned_value = self.read::<u32>(mem, aligned_address);
 
         let result = match address & 3
         {

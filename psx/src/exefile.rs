@@ -61,7 +61,7 @@ impl ExeFile
         // TODO make sure it's aligned?
         for offset in 0 .. self.destination_size()
         {
-            mem.write8(destination + offset, self.data[0x800 + offset as usize]);
+            mem.write::<u8>(destination + offset, self.data[0x800 + offset as usize]);
         }
 
         cpu.next_pc = self.pc();

@@ -10,9 +10,8 @@ mod exefile;
 mod gpu;
 mod interrupt_controller;
 mod memory;
-mod ram;
+mod memory_segment;
 mod renderer;
-mod scratchpad;
 mod spu;
 
 #[macro_use]
