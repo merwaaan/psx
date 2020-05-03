@@ -10,9 +10,7 @@ mod support;
 
 fn main()
 {
-    let system = support::init(1600, 800, file!());
-
-    // Initialize the emulation
+    // Check the arguments
 
     let args: Vec<String> = env::args().collect();
     if args.len() < 2
@@ -20,13 +18,25 @@ fn main()
         panic!("Usage: psxtest <bios> [game]");
     }
 
-    let mut program_path = PathBuf::new();
-    if args.len() > 2
-    {
-        program_path.push(args[2].clone());
-    }
+    let mut bios_path = PathBuf::new();
+    bios_path.push(&args[1]);
 
-    let mut p = PSX::new(&Path::new(&args[1]), program_path, &system.display);
+    let program_path = match args.len()
+    {
+        2 => None,
+        _ =>
+        {
+            let mut path = PathBuf::new();
+            path.push(&args[2]);
+            Some(path)
+        }
+    };
+
+    // Initialize the emulation
+
+    let system = support::init(1600, 800, file!());
+
+    let mut p = PSX::new(bios_path, program_path, &system.display);
 
     match p.cpu.debugger.load("debugger.json")
     {

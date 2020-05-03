@@ -2,7 +2,7 @@
 
 use std::fs::File;
 use std::io::Read;
-use std::path::Path;
+use std::path::PathBuf;
 
 pub struct BIOS
 {
@@ -11,7 +11,7 @@ pub struct BIOS
 
 impl BIOS
 {
-    pub fn new(path: &Path) -> Self
+    pub fn new(path: PathBuf) -> Self
     {
         println!("Loading BIOS: \"{}\"", path.display());
 

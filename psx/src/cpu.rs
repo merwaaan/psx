@@ -66,7 +66,10 @@ pub struct CPU
 
 impl CPU
 {
-    pub fn new(interrupt_controller: &Rc<RefCell<InterruptController>>, exe_path: Option<PathBuf>) -> Self
+    pub fn new(
+        interrupt_controller: &Rc<RefCell<InterruptController>>,
+        exe_path: Option<PathBuf>)
+        -> Self
     {
         CPU
         {

@@ -10,7 +10,7 @@ use crate::scratchpad::Scratchpad;
 use crate::spu::SPU;
 
 use std::cell::RefCell;
-use std::path::Path;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 pub struct Memory
@@ -28,7 +28,7 @@ pub struct Memory
 
 impl Memory
 {
-    pub fn new(bios_path: &Path, display: &glium::Display, interrupt_controller: &Rc<RefCell<InterruptController>>) -> Self
+    pub fn new(bios_path: PathBuf, display: &glium::Display, interrupt_controller: &Rc<RefCell<InterruptController>>) -> Self
     {
         Memory
         {

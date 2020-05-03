@@ -4,7 +4,7 @@ use crate::interrupt_controller::InterruptController;
 use crate::memory::Memory;
 
 use std::cell::RefCell;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
 
 pub struct PSX
@@ -16,20 +16,27 @@ pub struct PSX
 
 impl PSX
 {
-    // TODO program path as Option<PathBuf>
-    pub fn new(bios_path: &Path, program_path: PathBuf, display: &glium::Display) -> Self
+    pub fn new(bios_path: PathBuf, program_path: Option<PathBuf>, display: &glium::Display) -> Self
     {
         env_logger::init();
 
         let _interrupt_controller = Rc::new(RefCell::new(InterruptController::new()));
 
-        // If the program is stored in an EXE file, we'll need to load it
-        // hot-load it after the BIOS has been initialized
-        let exe_path = match program_path.extension().unwrap().to_str().unwrap() // TODO remove unwraps
+        // If the program is stored in an EXE file, we'll need
+        // to hot-load it after the BIOS has been initialized
+
+        let exe_path = program_path.and_then(|path|
         {
-            "exe" => Some(program_path),
-            _ => None
-        };
+            path.extension()
+                .and_then(|ext| ext.to_str()) // OsStr to &str
+                .and_then(|ext|
+                    match ext
+                    {
+                        "exe" => Some(path.clone()),
+                        _ => None
+                    }
+                )
+        });
 
         PSX
         {
