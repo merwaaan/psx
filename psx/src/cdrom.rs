@@ -50,17 +50,18 @@ impl CDROM
     // TODO read is mut self which is weird, use some form of interior mutability?
     pub fn read<T: Addressable>(&mut self, offset: u32) -> T
     {
-        error!("CDROM read8 @ {} (index {})", offset, self.index);
+        error!("CDROM read {:?} @ {} (index {})", T::width(), offset, self.index);
 
-        if T::width() != Width::Word
+        if T::width() != Width::Byte
         {
-            panic!("GPU read, unexpected width {:?}");
+            panic!("CDROM read, unexpected width {:?}");
         }
 
         match offset
         {
             0 =>
             {
+                error!("CDROM status: {:08X}", self.status());
                 T::from_u8(self.status())
             },
 
@@ -84,11 +85,13 @@ impl CDROM
 
             2 =>
             {
+                error!("CDROM pop data FIFO: {:02X} NOT IMPLEMENTED", 0);
                 T::from_u8(0) // data FIFO
             },
 
             3 =>
             {
+                error!("CDROM interrupt {}: {:08X}", self.index, if self.index == 0 ||self.index == 2 {self.interrupt_enable} else {self.interrupt_flag});
                 match self.index
                 {
                     0 | 2 => T::from_u8(self.interrupt_enable),
@@ -103,9 +106,9 @@ impl CDROM
 
     pub fn write<T: Addressable>(&mut self, offset: u32, value: T)
     {
-        error!("CDROM write8 {:08x} @ {} (index {})", value.as_u32(), offset, self.index);
-        panic!();
-        if T::width() != Width::Word
+        error!("CDROM write {:?} {:08x} @ {} (index {})", T::width(), value.as_u32(), offset, self.index);
+
+        if T::width() != Width::Byte
         {
             panic!("CDROM write, unexpected width {:?}");
         }
@@ -189,7 +192,7 @@ impl CDROM
     {
         (0 << 7) | // Command/Parameter transmission busy
         (0 << 6) | // Data FIFO empty
-        (0 << 5) | // Response FIFO empty
+        (((self.response_fifo.len() != 0) as u8) << 5) | // Response FIFO empty (0 = empty)
         (((self.parameter_fifo.len() != 16) as u8) << 4) | // Parameter FIFO full (0 = full)
         (((self.parameter_fifo.len() == 0) as u8) << 3) | // Parameter FIFO empty (1 = empty)
         (0 << 2) | // ??
@@ -211,7 +214,7 @@ impl CDROM
     fn command(&mut self, value: u8)
     {
         error!("CDROM command {:08X}", value);
-panic!();
+
         match value
         {
             // Test
