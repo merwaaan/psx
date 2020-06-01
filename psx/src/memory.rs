@@ -116,8 +116,10 @@ impl Memory
             0x1F80_0000 ..= 0x1F80_03FF => self.scratchpad.read(address - 0x1F80_0000),
 
             0x1F80_1040 ..= 0x1F80_105F => { warn!("Ignoring IO read {:08x}", address); T::from_u32(0xFFFF) },
-            0x1F80_1070 => T::from_u16(self.interrupt_controller.borrow().read_status()),
-            0x1F80_1074 => T::from_u16(self.interrupt_controller.borrow().read_mask()),
+
+            0x1F80_1070 ..= 0x1F80_1073 => T::from_u16(self.interrupt_controller.borrow().read_status()), // TODO extract actual part
+            0x1F80_1074 ..= 0x1F80_1077 => T::from_u16(self.interrupt_controller.borrow().read_mask()),
+
             0x1F80_1080 ..= 0x1F80_10FF => self.dma.read(address - 0x1F80_1080),
             0x1F80_1100 ..= 0x1F80_112F => { warn!("Ignoring Timer read {:08x}", address); T::from_u32(0) },
             0x1F80_1800 ..= 0x1F80_1803 => self.cd.read(address - 0x1F80_1800),
@@ -137,7 +139,11 @@ impl Memory
 
             0xBFC0_0000 ..= 0xBFC8_0000 => self.bios.read(address - 0xBFC0_0000), // TODO exclusive range
 
-            _ => panic!("Unsupported read {:?} @ {:08x}", T::width(), address)
+            _ =>
+            {
+                error!("Unsupported read {:?} @ {:08x}", T::width(), address);
+                T::from_u8(0)
+            }
         }
     }
 
@@ -162,7 +168,7 @@ impl Memory
             0x1f80_1810  => self.gpu.gp0(value.as_u32()),
             0x1f80_1814 => self.gpu.gp1(value.as_u32()),
             0x1F80_1C00 ..= 0x1F80_1E80 => self.spu.write(address - 0x1F80_1C00, value.as_u16()),
-            0x1F80_2000 ..= 0x1F80_2042 => warn!("Ignoring write to Expansion 2"),
+            0x1F80_2000 ..= 0x1F80_2042 => warn!("Ignoring write {:?} to Expansion 2 @ {:X}", T::width(), address),
 
             // KSEG1
 

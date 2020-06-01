@@ -168,7 +168,7 @@ impl CPU
         self.pc = self.next_pc;
         self.next_pc = self.pc.wrapping_add(4);
 
-        /*let debug_addr = 2695619+378397+314380+1000000+271000+454620+400000+250000+1000000+2200000+399553;
+        let debug_addr = 129925482 - 10000;
         let mut debug = false;
         if self.counter >= debug_addr && self.counter < debug_addr + 400000
         {
@@ -200,16 +200,15 @@ impl CPU
                 debug!("\tR{} = {:08x}", i, self.r[i]);
             }*/
 
-
             self.logging = true;
-        }*/
+        }
 
         self.counter += 1;
 
-        if self.logging
+        /*if self.logging
         {
             debug!("\nopcode {:08x} @ {:08x} | {:b} | {}", opcode, self.current_pc, self.status, self.counter);
-        }
+        }*/
 
         match opcode.instr()
         {
@@ -329,20 +328,19 @@ impl CPU
     {
         // Update bit 10 of the CAUSE register to reflect that an interrupt is pending or not
 
-        if self.interrupt_controller.borrow().pending(self.counter % 100000 == 0)
+        if self.interrupt_controller.borrow().pending(false)
         {
             self.cop0_cause |= 1 << 10; // bit 10 = external interrupt
-            //error!("SETTING CAUSE BIT: {:032b}", self.cause);
+            //error!("SETTING CAUSE BIT: {:032b}", self.cop0_cause);
         }
         else
         {
             self.cop0_cause &= !(1 << 10);
         }
 
-        /*if self.counter % 100000 == 0
+        /*if self.counter > 129925482 - 10000
         {
-            error!("CAUSE {:032b}", self.cause);
-            error!("STATU {:032b}", self.status);
+            error!("CAUSE {:032b}", self.cop0_cause);
         }*/
 
         (self.status & 1) != 0 && // Interrupt enabled globally

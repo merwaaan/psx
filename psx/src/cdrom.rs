@@ -103,11 +103,11 @@ impl CDROM
 
     pub fn write<T: Addressable>(&mut self, offset: u32, value: T)
     {
-        //error!("CDROM write8 {:08X} @ {} (index {})", value, offset, self.index);
-
+        error!("CDROM write8 {:08x} @ {} (index {})", value.as_u32(), offset, self.index);
+        panic!();
         if T::width() != Width::Word
         {
-            panic!("GPU write, unexpected width {:?}");
+            panic!("CDROM write, unexpected width {:?}");
         }
 
         let value = value.as_u8();
@@ -211,7 +211,7 @@ impl CDROM
     fn command(&mut self, value: u8)
     {
         error!("CDROM command {:08X}", value);
-
+panic!();
         match value
         {
             // Test

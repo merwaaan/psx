@@ -41,7 +41,7 @@ impl InterruptController
 
     pub fn write_status(&mut self, value: u16)
     {
-        self.interrupt_status = value & INTERRUPT_REGISTER_MASK;
+        self.interrupt_status &= value & INTERRUPT_REGISTER_MASK;
         //error!("interrupt status set {:b}", self.interrupt_status );
     }
 
@@ -68,11 +68,11 @@ impl InterruptController
 
     pub fn pending(&self, p: bool) -> bool
     {
-        if p
+        /*if p
         {
-            //error!("stat {:b}", self.interrupt_status);
-            //error!("mask {:b}", self.interrupt_mask);
-        }
+            error!("stat {:b}", self.interrupt_status);
+            error!("mask {:b}", self.interrupt_mask);
+        }*/
         (self.interrupt_status & self.interrupt_mask) != 0
     }
 }
